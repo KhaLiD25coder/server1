@@ -14,6 +14,7 @@ import httpx  # self-ping
 # ================= CONFIG =================
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # from Render env vars
 ADMIN_IDS = [int(i) for i in os.environ.get("ADMIN_IDS", "").split(",") if i]
+print(f"[DEBUG] Loaded ADMIN_IDS from env: {ADMIN_IDS}")
 GUILD_ID = int(os.environ.get("GUILD_ID", "0"))
 DB_PATH = "licenses.db"
 
@@ -71,6 +72,7 @@ class LicenseBot(discord.Client):
 bot = LicenseBot()
 
 def is_admin(interaction: discord.Interaction):
+    print(f"[DEBUG] Interaction user ID: {interaction.user.id}, Admin IDs: {ADMIN_IDS}")
     return interaction.user.id in ADMIN_IDS
 
 @bot.tree.command(name="addkey", description="Add a new license key")
