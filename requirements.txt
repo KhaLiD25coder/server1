@@ -1,3 +1,5 @@
 fastapi
 uvicorn
 discord.py
+sqlite3-binary
+httpx
