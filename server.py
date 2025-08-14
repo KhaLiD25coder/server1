@@ -1,5 +1,4 @@
 import os
-
 import asyncio
 import uvicorn
 from fastapi import FastAPI
@@ -8,6 +7,7 @@ import sqlite3
 import discord
 from discord import app_commands
 from datetime import datetime, timedelta
+import httpx  # <--- NEW for self-ping
 
 # ==================== CONFIG ====================
 DISCORD_TOKEN = "MTQwNDc2Njc3NzMyMTQ1NTY2OA.GmdLjl.yNxE6FhvlBOlPra6Q6jLWJA6qdoMCF8CpENXKc"
@@ -20,6 +20,19 @@ app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("license-server")
 
+# --------- Self-ping background task ---------
+async def self_ping():
+    await asyncio.sleep(10)  # Wait for startup
+    url = f"https://server1-axrm.onrender.com/verify?key=PING&hwid=KEEPALIVE"
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(url)
+            print("🔄 Self-ping sent to keep service awake")
+        except Exception as e:
+            print(f"⚠️ Self-ping failed: {e}")
+        await asyncio.sleep(240)  # Every 4 minutes
+
 @app.on_event("startup")
 async def startup_event():
     conn = sqlite3.connect(DB_PATH)
@@ -29,6 +42,9 @@ async def startup_event():
     conn.commit()
     conn.close()
     logger.info("Database initialized.")
+
+    # Start self-ping loop
+    asyncio.create_task(self_ping())
 
 @app.get("/verify")
 async def verify_license(key: str, hwid: str = None):
