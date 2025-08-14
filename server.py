@@ -7,34 +7,18 @@ import sqlite3
 import discord
 from discord import app_commands
 from datetime import datetime, timedelta
-import httpx  # <--- NEW for self-ping
+from contextlib import asynccontextmanager
 
 # ==================== CONFIG ====================
-DISCORD_TOKEN = "MTQwNDc2Njc3NzMyMTQ1NTY2OA.GmdLjl.yNxE6FhvlBOlPra6Q6jLWJA6qdoMCF8CpENXKc"
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # Read token from Render env variable
 ADMIN_IDS = [1240624476949975218]
 GUILD_ID = 1240624476949975218  # Your Discord server ID
 DB_PATH = "licenses.db"
 
 # ==================== FASTAPI ====================
-app = FastAPI()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("license-server")
-
-# --------- Self-ping background task ---------
-async def self_ping():
-    await asyncio.sleep(10)  # Wait for startup
-    url = f"https://server1-axrm.onrender.com/verify?key=PING&hwid=KEEPALIVE"
-    while True:
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.get(url)
-            print("🔄 Self-ping sent to keep service awake")
-        except Exception as e:
-            print(f"⚠️ Self-ping failed: {e}")
-        await asyncio.sleep(240)  # Every 4 minutes
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS licenses
@@ -43,8 +27,15 @@ async def startup_event():
     conn.close()
     logger.info("Database initialized.")
 
-    # Start self-ping loop
-    asyncio.create_task(self_ping())
+    yield
+
+    # Shutdown (nothing to clean here for now)
+
+
+app = FastAPI(lifespan=lifespan)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("license-server")
+
 
 @app.get("/verify")
 async def verify_license(key: str, hwid: str = None):
@@ -61,6 +52,7 @@ async def verify_license(key: str, hwid: str = None):
     if saved_hwid and hwid and saved_hwid != hwid:
         return {"status": "hwid_mismatch"}
     return {"status": "valid"}
+
 
 # ==================== DISCORD BOT ====================
 class LicenseBot(discord.Client):
@@ -81,7 +73,8 @@ async def add_key(interaction: discord.Interaction, key: str, days: int):
     expiry = datetime.utcnow() + timedelta(days=days)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, NULL)", (key, expiry.strftime("%Y-%m-%d")))
+    c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, NULL)",
+              (key, expiry.strftime("%Y-%m-%d")))
     conn.commit()
     conn.close()
     await interaction.response.send_message(f"✅ License key '{key}' added for {days} days.", ephemeral=True)
@@ -110,6 +103,7 @@ async def reset_hwid(interaction: discord.Interaction, key: str):
     conn.close()
     await interaction.response.send_message(f"🔄 HWID for license key '{key}' reset.", ephemeral=True)
 
+
 @bot.event
 async def on_ready():
     try:
@@ -120,8 +114,12 @@ async def on_ready():
         print(f"❌ Failed to sync commands: {e}")
     print(f"Bot is online as {bot.user}")
 
+
 # ==================== RUN BOTH ====================
 async def main():
+    if not DISCORD_TOKEN:
+        raise ValueError("❌ DISCORD_TOKEN environment variable not set!")
+
     config = uvicorn.Config(app, host="0.0.0.0", port=int(os.environ.get('PORT', 8000)), loop="asyncio")
     server = uvicorn.Server(config)
 
@@ -129,6 +127,7 @@ async def main():
     uvicorn_task = asyncio.create_task(server.serve())
 
     await asyncio.gather(uvicorn_task, bot_task)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
