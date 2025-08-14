@@ -3,21 +3,22 @@ import asyncio
 import logging
 import sqlite3
 from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
 
 import uvicorn
 import discord
 from discord import app_commands
 from fastapi import FastAPI
-from contextlib import asynccontextmanager
 import httpx  # for self-ping
 
-# ================= CONFIG =================
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # from Render env var
+# ========== CONFIG ==========
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 ADMIN_IDS = [int(i) for i in os.environ.get("ADMIN_IDS", "").split(",") if i]
 GUILD_ID = int(os.environ.get("GUILD_ID", "0"))
 DB_PATH = "licenses.db"
+RENDER_URL = os.environ.get("RENDER_URL")  # for self-ping
 
-# ================= DATABASE INIT =================
+# ========== DB INIT ==========
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -29,7 +30,7 @@ def init_db():
     conn.close()
     logging.info("Database initialized.")
 
-# ================= FASTAPI =================
+# ========== FASTAPI ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -53,7 +54,7 @@ async def verify_license(key: str, hwid: str = None):
         return {"status": "invalid"}
 
     expiry_date, saved_hwid = row
-    if datetime.strptime(expiry_date, "%Y-%m-%d") < datetime.utcnow():
+    if datetime.strptime(expiry_date, "%Y-%m-%d") < datetime.now(datetime.UTC):
         return {"status": "expired"}
 
     if saved_hwid and hwid and saved_hwid != hwid:
@@ -61,10 +62,10 @@ async def verify_license(key: str, hwid: str = None):
 
     return {"status": "valid"}
 
-# ================= DISCORD BOT =================
+# ========== DISCORD BOT ==========
 class LicenseBot(discord.Client):
     def __init__(self):
-        intents = discord.Intents.default()  # no voice intents
+        intents = discord.Intents.default()
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
@@ -73,13 +74,12 @@ bot = LicenseBot()
 def is_admin(interaction: discord.Interaction):
     return interaction.user.id in ADMIN_IDS
 
-@bot.tree.command(name="addkey", description="Add a new license key")
+@bot.tree.command(name="addkey", description="Add a license key")
 async def add_key(interaction: discord.Interaction, key: str, days: int):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
-
-    expiry = datetime.utcnow() + timedelta(days=days)
+    expiry = datetime.now(datetime.UTC) + timedelta(days=days)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, NULL)",
@@ -93,7 +93,6 @@ async def remove_key(interaction: discord.Interaction, key: str):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
-
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM licenses WHERE key=?", (key,))
@@ -106,7 +105,6 @@ async def reset_hwid(interaction: discord.Interaction, key: str):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
-
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("UPDATE licenses SET hwid=NULL WHERE key=?", (key,))
@@ -122,25 +120,24 @@ async def on_ready():
         print(f"✅ Commands synced to guild {GUILD_ID}.")
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
-    print(f"Bot online as {bot.user}")
+    print(f"🤖 Bot online as {bot.user}")
 
-# ================= SELF-PING TASK =================
+# ========== SELF-PING ==========
 async def self_ping():
-    url = os.environ.get("RENDER_URL")
-    if not url:
+    if not RENDER_URL:
         return
     async with httpx.AsyncClient() as client:
         while True:
             try:
-                await client.get(url)
-                print(f"🔄 Pinged {url}")
+                await client.get(RENDER_URL)
+                print(f"🔄 Pinged {RENDER_URL}")
             except Exception as e:
                 print(f"⚠️ Self-ping failed: {e}")
-            await asyncio.sleep(300)  # every 5 min
+            await asyncio.sleep(300)
 
-# ================= RUN BOTH =================
+# ========== RUN BOTH ==========
 async def main():
-    if os.environ.get("RENDER_URL"):
+    if RENDER_URL:
         asyncio.create_task(self_ping())
 
     config = uvicorn.Config(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), loop="asyncio")
