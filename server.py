@@ -1,8 +1,7 @@
-import sys
-sys.modules['audioop'] = None
 import os
 import asyncio
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 
 import uvicorn
@@ -10,29 +9,23 @@ import discord
 from discord import app_commands
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-import httpx
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import httpx  # for self-ping
 
 # ================= CONFIG =================
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # from Render env var
 ADMIN_IDS = [int(i) for i in os.environ.get("ADMIN_IDS", "").split(",") if i]
 GUILD_ID = int(os.environ.get("GUILD_ID", "0"))
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DB_PATH = "licenses.db"
 
 # ================= DATABASE INIT =================
 def init_db():
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS licenses (
-            key TEXT PRIMARY KEY,
-            expiry_date TEXT,
-            hwid TEXT
-        )
-    """)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        '''CREATE TABLE IF NOT EXISTS licenses
+           (key TEXT PRIMARY KEY, expiry_date TEXT, hwid TEXT)'''
+    )
     conn.commit()
-    cur.close()
     conn.close()
     logging.info("Database initialized.")
 
@@ -50,19 +43,16 @@ async def root():
 
 @app.get("/verify")
 async def verify_license(key: str, hwid: str = None):
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT expiry_date, hwid FROM licenses WHERE key=%s", (key,))
-    row = cur.fetchone()
-    cur.close()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT expiry_date, hwid FROM licenses WHERE key=?", (key,))
+    row = c.fetchone()
     conn.close()
 
     if not row:
         return {"status": "invalid"}
 
-    expiry_date = row['expiry_date']
-    saved_hwid = row['hwid']
-
+    expiry_date, saved_hwid = row
     if datetime.strptime(expiry_date, "%Y-%m-%d") < datetime.utcnow():
         return {"status": "expired"}
 
@@ -74,7 +64,7 @@ async def verify_license(key: str, hwid: str = None):
 # ================= DISCORD BOT =================
 class LicenseBot(discord.Client):
     def __init__(self):
-        intents = discord.Intents.default()
+        intents = discord.Intents.default()  # no voice intents
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
@@ -90,15 +80,11 @@ async def add_key(interaction: discord.Interaction, key: str, days: int):
         return
 
     expiry = datetime.utcnow() + timedelta(days=days)
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO licenses (key, expiry_date, hwid)
-        VALUES (%s, %s, NULL)
-        ON CONFLICT (key) DO UPDATE SET expiry_date = EXCLUDED.expiry_date, hwid = NULL
-    """, (key, expiry.strftime("%Y-%m-%d")))
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, NULL)",
+              (key, expiry.strftime("%Y-%m-%d")))
     conn.commit()
-    cur.close()
     conn.close()
     await interaction.response.send_message(f"✅ Key '{key}' added for {days} days.", ephemeral=True)
 
@@ -108,11 +94,10 @@ async def remove_key(interaction: discord.Interaction, key: str):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
 
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM licenses WHERE key=%s", (key,))
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM licenses WHERE key=?", (key,))
     conn.commit()
-    cur.close()
     conn.close()
     await interaction.response.send_message(f"🗑 Key '{key}' removed.", ephemeral=True)
 
@@ -122,11 +107,10 @@ async def reset_hwid(interaction: discord.Interaction, key: str):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
 
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute("UPDATE licenses SET hwid=NULL WHERE key=%s", (key,))
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE licenses SET hwid=NULL WHERE key=?", (key,))
     conn.commit()
-    cur.close()
     conn.close()
     await interaction.response.send_message(f"🔄 HWID for key '{key}' reset.", ephemeral=True)
 
@@ -152,7 +136,7 @@ async def self_ping():
                 print(f"🔄 Pinged {url}")
             except Exception as e:
                 print(f"⚠️ Self-ping failed: {e}")
-            await asyncio.sleep(300)
+            await asyncio.sleep(300)  # every 5 min
 
 # ================= RUN BOTH =================
 async def main():
@@ -171,3 +155,4 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise ValueError("❌ DISCORD_TOKEN not set in environment variables")
     asyncio.run(main())
+
