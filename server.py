@@ -2,7 +2,7 @@ import os
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 import uvicorn
 import discord
@@ -53,7 +53,7 @@ async def verify_license(key: str, hwid: str = None):
         return {"status": "invalid"}
 
     expiry_date, saved_hwid = row
-    if datetime.strptime(expiry_date, "%Y-%m-%d") < datetime.utcnow():
+    if datetime.strptime(expiry_date, "%Y-%m-%d") < datetime.now(UTC):
         return {"status": "expired"}
 
     if saved_hwid and hwid and saved_hwid != hwid:
@@ -79,7 +79,7 @@ async def add_key(interaction: discord.Interaction, key: str, days: int):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
 
-    expiry = datetime.utcnow() + timedelta(days=days)
+    expiry = datetime.now(UTC) + timedelta(days=days)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, NULL)",
@@ -140,15 +140,12 @@ async def self_ping():
 
 # ================= RUN BOTH =================
 async def main():
-    # Start self-ping if URL is set
     if os.environ.get("RENDER_URL"):
         asyncio.create_task(self_ping())
 
-    # Start FastAPI
     config = uvicorn.Config(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), loop="asyncio")
     server = uvicorn.Server(config)
 
-    # Start bot
     bot_task = asyncio.create_task(bot.start(DISCORD_TOKEN))
     uvicorn_task = asyncio.create_task(server.serve())
 
