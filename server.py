@@ -1,3 +1,5 @@
+import sys
+sys.modules['audioop'] = None
 import os
 import asyncio
 import logging
