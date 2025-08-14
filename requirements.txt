@@ -1,5 +1,4 @@
+discord.py
 fastapi
-uvicorn[standard]
-py-cord==2.4.1
-asyncpg
+uvicorn
 httpx
