@@ -15,7 +15,7 @@ import httpx  # for self-ping
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # from Render env var
 ADMIN_IDS = [int(i) for i in os.environ.get("ADMIN_IDS", "").split(",") if i]
 GUILD_ID = int(os.environ.get("GUILD_ID", "0"))
-DB_PATH = "licenses.db"
+DB_PATH = "/data/licenses.db"  
 
 # ================= DATABASE INIT =================
 def init_db():
