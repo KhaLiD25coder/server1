@@ -115,8 +115,14 @@ bot = LicenseBot()
 def is_admin(interaction: discord.Interaction):
     return interaction.user.id in ADMIN_IDS
 
+async def log_command_usage(interaction: discord.Interaction, command_name: str, **params):
+    user = f"{interaction.user} ({interaction.user.id})"
+    param_str = ", ".join(f"{k}={v}" for k, v in params.items())
+    print(f"[COMMAND USED] /{command_name} by {user} | Params: {param_str}")
+
 @bot.tree.command(name="addkey", description="Add a new license key")
 async def add_key(interaction: discord.Interaction, key: str, days: int):
+    await log_command_usage(interaction, "addkey", key=key, days=days)
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
@@ -132,6 +138,7 @@ async def add_key(interaction: discord.Interaction, key: str, days: int):
 
 @bot.tree.command(name="removekey", description="Remove a license key")
 async def remove_key(interaction: discord.Interaction, key: str):
+    await log_command_usage(interaction, "removekey", key=key)
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
@@ -145,6 +152,7 @@ async def remove_key(interaction: discord.Interaction, key: str):
 
 @bot.tree.command(name="resethwid", description="Reset HWID for a license key")
 async def reset_hwid(interaction: discord.Interaction, key: str):
+    await log_command_usage(interaction, "resethwid", key=key)
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
@@ -158,6 +166,7 @@ async def reset_hwid(interaction: discord.Interaction, key: str):
 
 @bot.tree.command(name="listkeys", description="List all currently live license keys")
 async def list_keys(interaction: discord.Interaction):
+    await log_command_usage(interaction, "listkeys")
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
@@ -180,11 +189,16 @@ async def list_keys(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     try:
-        await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-        print(f"✅ Commands synced to guild {GUILD_ID}.")
+        guild = discord.Object(id=GUILD_ID)
+        bot.tree.copy_global_to(guild=guild)  # Make commands guild-specific
+        await bot.tree.sync(guild=guild)      # Force re-sync
+        print(f"✅ Slash commands synced to guild {GUILD_ID}.")
     except Exception as e:
         print(f"❌ Command sync failed: {e}")
+
     print(f"Bot online as {bot.user}")
+
+    # Log live keys on startup
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT key, expiry_date, hwid FROM licenses")
