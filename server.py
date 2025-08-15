@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import logging
 import sqlite3
@@ -16,6 +17,7 @@ ADMIN_IDS = [int(i) for i in os.environ.get("ADMIN_IDS", "").split(",") if i]
 print(f"[DEBUG] Loaded ADMIN_IDS from env: {ADMIN_IDS}")
 GUILD_ID = int(os.environ.get("GUILD_ID", "0"))
 DB_PATH = "licenses.db"
+LICENSES_JSON_PATH = "licenses.json"
 
 # ================= DATABASE INIT =================
 def init_db():
@@ -29,10 +31,82 @@ def init_db():
     conn.close()
     logging.info("Database initialized.")
 
+def import_licenses_from_json():
+    if not os.path.exists(LICENSES_JSON_PATH):
+        print(f"[DEBUG] No {LICENSES_JSON_PATH} file found. Skipping import.")
+        return
+
+    try:
+        with open(LICENSES_JSON_PATH, "r") as f:
+            data = json.load(f)
+
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        imported_count = 0
+
+        if isinstance(data, dict):  # Timestamp format
+            for key, timestamp in data.items():
+                try:
+                    expiry_date = datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d")
+                except Exception as e:
+                    print(f"[ERROR] Invalid timestamp for key {key}: {e}")
+                    continue
+
+                c.execute("SELECT key FROM licenses WHERE key=?", (key,))
+                if not c.fetchone():
+                    c.execute("INSERT INTO licenses (key, expiry_date, hwid) VALUES (?, ?, NULL)",
+                              (key, expiry_date))
+                    imported_count += 1
+
+        elif isinstance(data, list):  # Structured object format
+            for lic in data:
+                key = lic.get("key")
+                expiry_date = lic.get("expiry_date")
+                hwid = lic.get("hwid", None)
+
+                if not key or not expiry_date:
+                    continue
+
+                c.execute("SELECT key FROM licenses WHERE key=?", (key,))
+                if not c.fetchone():
+                    c.execute("INSERT INTO licenses (key, expiry_date, hwid) VALUES (?, ?, ?)",
+                              (key, expiry_date, hwid))
+                    imported_count += 1
+
+        conn.commit()
+        conn.close()
+        print(f"[DEBUG] Imported {imported_count} keys from {LICENSES_JSON_PATH}")
+    except Exception as e:
+        print(f"[ERROR] Failed to import licenses from JSON: {e}")
+
+def export_licenses_to_json():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT key, expiry_date, hwid FROM licenses")
+        rows = c.fetchall()
+        conn.close()
+
+        data = []
+        for key, expiry_date, hwid in rows:
+            data.append({
+                "key": key,
+                "expiry_date": expiry_date,
+                "hwid": hwid
+            })
+
+        with open(LICENSES_JSON_PATH, "w") as f:
+            json.dump(data, f, indent=4)
+
+        print(f"[DEBUG] Exported {len(data)} keys to {LICENSES_JSON_PATH}")
+    except Exception as e:
+        print(f"[ERROR] Failed to export licenses to JSON: {e}")
+
 # ================= FASTAPI =================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    import_licenses_from_json()
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -82,7 +156,7 @@ def is_admin(interaction: discord.Interaction):
 
 @bot.tree.command(name="addkey", description="Add a new license key")
 async def add_key(interaction: discord.Interaction, key: str, days: int):
-    await interaction.response.defer(ephemeral=True)  # Keep defer for safety
+    await interaction.response.defer(ephemeral=True)
     if not is_admin(interaction):
         await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
@@ -98,7 +172,7 @@ async def add_key(interaction: discord.Interaction, key: str, days: int):
 
 @bot.tree.command(name="removekey", description="Remove a license key")
 async def remove_key(interaction: discord.Interaction, key: str):
-    await interaction.response.defer(ephemeral=True)  # Keep defer for safety
+    await interaction.response.defer(ephemeral=True)
     if not is_admin(interaction):
         await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
@@ -112,8 +186,9 @@ async def remove_key(interaction: discord.Interaction, key: str):
 
 @bot.tree.command(name="resethwid", description="Reset HWID for a license key")
 async def reset_hwid(interaction: discord.Interaction, key: str):
+    await interaction.response.defer(ephemeral=True)  # Immediate ACK to avoid 404
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
+        await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
 
     conn = sqlite3.connect(DB_PATH)
@@ -121,7 +196,7 @@ async def reset_hwid(interaction: discord.Interaction, key: str):
     c.execute("UPDATE licenses SET hwid=NULL WHERE key=?", (key,))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"🔄 HWID for key '{key}' reset.", ephemeral=True)
+    await interaction.followup.send(f"🔄 HWID for key '{key}' reset.", ephemeral=True)
 
 @bot.event
 async def on_ready():
@@ -133,7 +208,7 @@ async def on_ready():
         print(f"❌ Failed to sync commands: {e}")
     print(f"Bot online as {bot.user}")
 
-# ================= SELF-PING TASK =================
+# ================= BACKGROUND TASKS =================
 async def self_ping():
     url = os.environ.get("RENDER_URL")
     if not url:
@@ -147,10 +222,17 @@ async def self_ping():
                 print(f"⚠️ Self-ping failed: {e}")
             await asyncio.sleep(300)
 
+async def periodic_export():
+    while True:
+        export_licenses_to_json()
+        await asyncio.sleep(300)  # Every 5 minutes
+
 # ================= RUN BOTH =================
 async def main():
     if os.environ.get("RENDER_URL"):
         asyncio.create_task(self_ping())
+
+    asyncio.create_task(periodic_export())
 
     config = uvicorn.Config(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), loop="asyncio")
     server = uvicorn.Server(config)
