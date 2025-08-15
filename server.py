@@ -43,6 +43,8 @@ async def root():
 
 @app.get("/verify")
 async def verify_license(key: str, hwid: str = None):
+    print(f"[DEBUG] License check request: key={key}, hwid={hwid}")
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT expiry_date, hwid FROM licenses WHERE key=?", (key,))
@@ -50,15 +52,19 @@ async def verify_license(key: str, hwid: str = None):
     conn.close()
 
     if not row:
+        print(f"[DEBUG] Result for key={key}: invalid")
         return {"status": "invalid"}
 
     expiry_date, saved_hwid = row
     if datetime.strptime(expiry_date, "%Y-%m-%d") < datetime.now(timezone.utc):
+        print(f"[DEBUG] Result for key={key}: expired")
         return {"status": "expired"}
 
     if saved_hwid and hwid and saved_hwid != hwid:
+        print(f"[DEBUG] Result for key={key}: hwid_mismatch (expected={saved_hwid})")
         return {"status": "hwid_mismatch"}
 
+    print(f"[DEBUG] Result for key={key}: valid")
     return {"status": "valid"}
 
 # ================= DISCORD BOT =================
