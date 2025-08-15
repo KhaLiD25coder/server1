@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"message": "License server is running 🚀"}
 
@@ -76,8 +76,7 @@ def is_admin(interaction: discord.Interaction):
 
 @bot.tree.command(name="addkey", description="Add a new license key")
 async def add_key(interaction: discord.Interaction, key: str, days: int):
-    await interaction.response.defer(ephemeral=True)  # prevent timeout
-
+    await interaction.response.defer(ephemeral=True)
     if not is_admin(interaction):
         await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
@@ -93,8 +92,7 @@ async def add_key(interaction: discord.Interaction, key: str, days: int):
 
 @bot.tree.command(name="removekey", description="Remove a license key")
 async def remove_key(interaction: discord.Interaction, key: str):
-    await interaction.response.defer(ephemeral=True)  # prevent timeout
-
+    await interaction.response.defer(ephemeral=True)
     if not is_admin(interaction):
         await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
@@ -108,8 +106,7 @@ async def remove_key(interaction: discord.Interaction, key: str):
 
 @bot.tree.command(name="resethwid", description="Reset HWID for a license key")
 async def reset_hwid(interaction: discord.Interaction, key: str):
-    await interaction.response.defer(ephemeral=True)  # prevent timeout
-
+    await interaction.response.defer(ephemeral=True)
     if not is_admin(interaction):
         await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
