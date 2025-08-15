@@ -29,11 +29,11 @@ def init_db():
     )
     conn.commit()
     conn.close()
-    print(f"[DEBUG] Database initialized at {DB_PATH}")
+    print(f"[DEBUG] Database initialized at {DB_PATH}", flush=True)
 
 def import_licenses_from_json():
     if not os.path.exists(LICENSES_JSON_PATH):
-        print(f"[DEBUG] No {LICENSES_JSON_PATH} found. Skipping import.")
+        print(f"[DEBUG] No {LICENSES_JSON_PATH} found. Skipping import.", flush=True)
         return
     try:
         with open(LICENSES_JSON_PATH, "r") as f:
@@ -56,9 +56,9 @@ def import_licenses_from_json():
                     imported_count += 1
         conn.commit()
         conn.close()
-        print(f"[DEBUG] Imported {imported_count} keys from JSON.")
+        print(f"[DEBUG] Imported {imported_count} keys from JSON.", flush=True)
     except Exception as e:
-        print(f"[ERROR] Import from JSON failed: {e}")
+        print(f"[ERROR] Import from JSON failed: {e}", flush=True)
 
 def export_licenses_to_json():
     try:
@@ -70,9 +70,9 @@ def export_licenses_to_json():
         data = [{"key": k, "expiry_date": e, "hwid": h} for k, e, h in rows]
         with open(LICENSES_JSON_PATH, "w") as f:
             json.dump(data, f, indent=4)
-        print(f"[DEBUG] Exported {len(data)} keys to JSON.")
+        print(f"[DEBUG] Exported {len(data)} keys to JSON.", flush=True)
     except Exception as e:
-        print(f"[ERROR] Export to JSON failed: {e}")
+        print(f"[ERROR] Export to JSON failed: {e}", flush=True)
 
 # ================= FASTAPI =================
 @asynccontextmanager
@@ -117,8 +117,8 @@ def is_admin(interaction: discord.Interaction):
 
 async def log_command_usage(interaction: discord.Interaction, command_name: str, **params):
     user = f"{interaction.user} ({interaction.user.id})"
-    param_str = ", ".join(f"{k}={v}" for k, v in params.items())
-    print(f"[COMMAND USED] /{command_name} by {user} | Params: {param_str}")
+    param_str = ", ".join(f"{k}={v}" for k, v in params.items()) if params else "No params"
+    print(f"[COMMAND USED] /{command_name} by {user} | Params: {param_str}", flush=True)
 
 @bot.tree.command(name="addkey", description="Add a new license key")
 async def add_key(interaction: discord.Interaction, key: str, days: int):
@@ -190,15 +190,14 @@ async def list_keys(interaction: discord.Interaction):
 async def on_ready():
     try:
         guild = discord.Object(id=GUILD_ID)
-        bot.tree.copy_global_to(guild=guild)  # Make commands guild-specific
-        await bot.tree.sync(guild=guild)      # Force re-sync
-        print(f"✅ Slash commands synced to guild {GUILD_ID}.")
+        bot.tree.copy_global_to(guild=guild)
+        await bot.tree.sync(guild=guild)
+        print(f"✅ Slash commands synced to guild {GUILD_ID}.", flush=True)
     except Exception as e:
-        print(f"❌ Command sync failed: {e}")
+        print(f"❌ Command sync failed: {e}", flush=True)
 
-    print(f"Bot online as {bot.user}")
+    print(f"Bot online as {bot.user}", flush=True)
 
-    # Log live keys on startup
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT key, expiry_date, hwid FROM licenses")
@@ -211,11 +210,11 @@ async def on_ready():
         if expiry_dt >= now:
             live_keys.append(f"{key} (expires {expiry_date}, HWID: {hwid or 'None'})")
     if live_keys:
-        print("🔑 Live keys on startup:")
+        print("🔑 Live keys on startup:", flush=True)
         for k in live_keys:
-            print("   •", k)
+            print("   •", k, flush=True)
     else:
-        print("🚫 No keys live on startup.")
+        print("🚫 No keys live on startup.", flush=True)
 
 # ================= BACKGROUND TASKS =================
 async def self_ping():
@@ -226,9 +225,9 @@ async def self_ping():
         while True:
             try:
                 await client.get(url)
-                print(f"🔄 Pinged {url}")
+                print(f"🔄 Pinged {url}", flush=True)
             except Exception as e:
-                print(f"⚠️ Self-ping failed: {e}")
+                print(f"⚠️ Self-ping failed: {e}", flush=True)
             await asyncio.sleep(300)
 
 async def periodic_export():
