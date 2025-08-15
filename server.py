@@ -2,17 +2,16 @@ import os
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime, timedelta
-
+from datetime import datetime, timedelta, timezone
 import uvicorn
 import discord
 from discord import app_commands
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-import httpx  # self-ping
+import httpx
 
 # ================= CONFIG =================
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # from Render env vars
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 ADMIN_IDS = [int(i) for i in os.environ.get("ADMIN_IDS", "").split(",") if i]
 print(f"[DEBUG] Loaded ADMIN_IDS from env: {ADMIN_IDS}")
 GUILD_ID = int(os.environ.get("GUILD_ID", "0"))
@@ -54,7 +53,7 @@ async def verify_license(key: str, hwid: str = None):
         return {"status": "invalid"}
 
     expiry_date, saved_hwid = row
-    if datetime.strptime(expiry_date, "%Y-%m-%d") < datetime.now(datetime.UTC):
+    if datetime.strptime(expiry_date, "%Y-%m-%d") < datetime.now(timezone.utc):
         return {"status": "expired"}
 
     if saved_hwid and hwid and saved_hwid != hwid:
@@ -77,23 +76,27 @@ def is_admin(interaction: discord.Interaction):
 
 @bot.tree.command(name="addkey", description="Add a new license key")
 async def add_key(interaction: discord.Interaction, key: str, days: int):
+    await interaction.response.defer(ephemeral=True)  # prevent timeout
+
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
+        await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
 
-    expiry = datetime.now(datetime.UTC) + timedelta(days=days)
+    expiry = datetime.now(timezone.utc) + timedelta(days=days)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, NULL)",
               (key, expiry.strftime("%Y-%m-%d")))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"✅ Key '{key}' added for {days} days.", ephemeral=True)
+    await interaction.followup.send(f"✅ Key '{key}' added for {days} days.", ephemeral=True)
 
 @bot.tree.command(name="removekey", description="Remove a license key")
 async def remove_key(interaction: discord.Interaction, key: str):
+    await interaction.response.defer(ephemeral=True)  # prevent timeout
+
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
+        await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
 
     conn = sqlite3.connect(DB_PATH)
@@ -101,12 +104,14 @@ async def remove_key(interaction: discord.Interaction, key: str):
     c.execute("DELETE FROM licenses WHERE key=?", (key,))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"🗑 Key '{key}' removed.", ephemeral=True)
+    await interaction.followup.send(f"🗑 Key '{key}' removed.", ephemeral=True)
 
 @bot.tree.command(name="resethwid", description="Reset HWID for a license key")
 async def reset_hwid(interaction: discord.Interaction, key: str):
+    await interaction.response.defer(ephemeral=True)  # prevent timeout
+
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
+        await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
 
     conn = sqlite3.connect(DB_PATH)
@@ -114,7 +119,7 @@ async def reset_hwid(interaction: discord.Interaction, key: str):
     c.execute("UPDATE licenses SET hwid=NULL WHERE key=?", (key,))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"🔄 HWID for key '{key}' reset.", ephemeral=True)
+    await interaction.followup.send(f"🔄 HWID for key '{key}' reset.", ephemeral=True)
 
 @bot.event
 async def on_ready():
@@ -138,7 +143,7 @@ async def self_ping():
                 print(f"🔄 Pinged {url}")
             except Exception as e:
                 print(f"⚠️ Self-ping failed: {e}")
-            await asyncio.sleep(300)  # every 5 min
+            await asyncio.sleep(300)
 
 # ================= RUN BOTH =================
 async def main():
