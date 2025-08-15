@@ -186,7 +186,7 @@ async def remove_key(interaction: discord.Interaction, key: str):
 
 @bot.tree.command(name="resethwid", description="Reset HWID for a license key")
 async def reset_hwid(interaction: discord.Interaction, key: str):
-    await interaction.response.defer(ephemeral=True)  # Immediate ACK to avoid 404
+    await interaction.response.defer(ephemeral=True)  # Immediate ACK
     if not is_admin(interaction):
         await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
