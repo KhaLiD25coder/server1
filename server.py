@@ -82,7 +82,7 @@ def is_admin(interaction: discord.Interaction):
 
 @bot.tree.command(name="addkey", description="Add a new license key")
 async def add_key(interaction: discord.Interaction, key: str, days: int):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True)  # Keep defer for safety
     if not is_admin(interaction):
         await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
@@ -98,7 +98,7 @@ async def add_key(interaction: discord.Interaction, key: str, days: int):
 
 @bot.tree.command(name="removekey", description="Remove a license key")
 async def remove_key(interaction: discord.Interaction, key: str):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True)  # Keep defer for safety
     if not is_admin(interaction):
         await interaction.followup.send("❌ Not authorized.", ephemeral=True)
         return
@@ -112,9 +112,8 @@ async def remove_key(interaction: discord.Interaction, key: str):
 
 @bot.tree.command(name="resethwid", description="Reset HWID for a license key")
 async def reset_hwid(interaction: discord.Interaction, key: str):
-    await interaction.response.defer(ephemeral=True)
     if not is_admin(interaction):
-        await interaction.followup.send("❌ Not authorized.", ephemeral=True)
+        await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
 
     conn = sqlite3.connect(DB_PATH)
@@ -122,7 +121,7 @@ async def reset_hwid(interaction: discord.Interaction, key: str):
     c.execute("UPDATE licenses SET hwid=NULL WHERE key=?", (key,))
     conn.commit()
     conn.close()
-    await interaction.followup.send(f"🔄 HWID for key '{key}' reset.", ephemeral=True)
+    await interaction.response.send_message(f"🔄 HWID for key '{key}' reset.", ephemeral=True)
 
 @bot.event
 async def on_ready():
