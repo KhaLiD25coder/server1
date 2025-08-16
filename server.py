@@ -80,8 +80,10 @@ async def on_ready():
     print(f"✅ Bot online as {bot.user}")
     try:
         guild = discord.Object(id=GUILD_ID)
-        await bot.tree.sync(guild=guild)
-        print(f"✅ Slash commands synced to guild {GUILD_ID}")
+        synced = await bot.tree.sync(guild=guild)
+        print(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}:")
+        for cmd in synced:
+            print(f"   • /{cmd.name} — {cmd.description}")
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
 
@@ -129,7 +131,6 @@ async def addkey(
 ):
     print("🟡 /addkey command received")
     await interaction.response.defer(ephemeral=True)
-    print("🟡 Deferred response")
 
     key = key or "TEST-KEY"
     expiry_date = expiry_date or 1760000000
@@ -156,7 +157,6 @@ async def addkey(
 async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
     print("🟡 /delkey command received")
     await interaction.response.defer(ephemeral=True)
-    print("🟡 Deferred response")
 
     key = key or "TEST-KEY"
 
@@ -186,7 +186,6 @@ async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KE
 async def resethwid(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
     print("🟡 /resethwid command received")
     await interaction.response.defer(ephemeral=True)
-    print("🟡 Deferred response")
 
     key = key or "TEST-KEY"
 
