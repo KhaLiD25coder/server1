@@ -18,7 +18,7 @@ JSON_PATH = "licenses.json"
 if not DISCORD_BOT_TOKEN:
     raise ValueError("❌ DISCORD_BOT_TOKEN not set in environment variables")
 
-# ================== DATABASE ==================
+# ================== DATABASE + JSON HELPERS ==================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -35,22 +35,28 @@ def init_db():
 def import_json_to_db():
     if not os.path.exists(JSON_PATH):
         return
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
     with open(JSON_PATH, "r") as f:
         data = json.load(f)
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
     for key, info in data.items():
-        if isinstance(info, int):
-            expiry = info
-            hwid = None
-        elif isinstance(info, dict):
-            expiry = info.get("expiry_date")
-            hwid = info.get("hwid")
-        else:
-            continue
+        expiry = info.get("expiry_date")
+        hwid = info.get("hwid")
         c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, ?)", (key, expiry, hwid))
     conn.commit()
     conn.close()
+
+def export_db_to_json():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT key, expiry_date, hwid FROM licenses")
+    rows = c.fetchall()
+    conn.close()
+
+    data = {row[0]: {"expiry_date": row[1], "hwid": row[2]} for row in rows}
+    with open(JSON_PATH, "w") as f:
+        json.dump(data, f, indent=2)
 
 # ================== FASTAPI APP ==================
 app = FastAPI()
@@ -73,9 +79,25 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
 
+    # Log all keys after bot is ready
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT key, expiry_date, hwid FROM licenses")
+    rows = c.fetchall()
+    conn.close()
+
+    print("📜 Current Keys in Database:")
+    if not rows:
+        print("   (No keys found)")
+    else:
+        for row in rows:
+            print(f"   🔑 {row[0]} | Expiry: {row[1]} | HWID: {row[2]}")
+
 # ========== SLASH COMMANDS ==========
 @bot.tree.command(name="listkeys", description="List all saved license keys", guild=discord.Object(id=GUILD_ID))
 async def listkeys(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT key, expiry_date, hwid FROM licenses")
@@ -83,29 +105,63 @@ async def listkeys(interaction: discord.Interaction):
     conn.close()
 
     if not rows:
-        await interaction.response.send_message("No keys found.", ephemeral=True)
+        await interaction.followup.send("No keys found.", ephemeral=True)
         return
 
     msg = "\n".join([f"🔑 {row[0]} | Expiry: {row[1]} | HWID: {row[2]}" for row in rows])
-    await interaction.response.send_message(msg[:1900], ephemeral=True)
+    await interaction.followup.send(msg[:1900], ephemeral=True)
 
 @bot.tree.command(name="addkey", description="Add a new license key", guild=discord.Object(id=GUILD_ID))
 async def addkey(interaction: discord.Interaction, key: str, expiry_date: int, hwid: str = None):
+    await interaction.response.defer(ephemeral=True)
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, ?)", (key, expiry_date, hwid))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"✅ Key `{key}` added!", ephemeral=True)
+    export_db_to_json()
+
+    print(f"✅ Key added: {key} | Expiry: {expiry_date} | HWID: {hwid}")
+    await interaction.followup.send(f"✅ Key `{key}` added!", ephemeral=True)
 
 @bot.tree.command(name="delkey", description="Delete a license key", guild=discord.Object(id=GUILD_ID))
 async def delkey(interaction: discord.Interaction, key: str):
+    await interaction.response.defer(ephemeral=True)
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM licenses WHERE key=?", (key,))
-    conn.commit()
-    conn.close()
-    await interaction.response.send_message(f"🗑️ Key `{key}` deleted!", ephemeral=True)
+    c.execute("SELECT key FROM licenses WHERE key=?", (key,))
+    exists = c.fetchone()
+    if exists:
+        c.execute("DELETE FROM licenses WHERE key=?", (key,))
+        conn.commit()
+        conn.close()
+        export_db_to_json()
+        print(f"🗑️ Key deleted: {key}")
+        await interaction.followup.send(f"🗑️ Key `{key}` deleted!", ephemeral=True)
+    else:
+        conn.close()
+        await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
+
+@bot.tree.command(name="resethwid", description="Reset the HWID for a license key", guild=discord.Object(id=GUILD_ID))
+async def resethwid(interaction: discord.Interaction, key: str):
+    await interaction.response.defer(ephemeral=True)
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT key FROM licenses WHERE key=?", (key,))
+    exists = c.fetchone()
+    if exists:
+        c.execute("UPDATE licenses SET hwid=NULL WHERE key=?", (key,))
+        conn.commit()
+        conn.close()
+        export_db_to_json()
+        print(f"♻️ HWID reset for key: {key}")
+        await interaction.followup.send(f"♻️ HWID reset for key `{key}`!", ephemeral=True)
+    else:
+        conn.close()
+        await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
 
 # ================== MAIN ==================
 async def main():
@@ -115,7 +171,9 @@ async def main():
     loop = asyncio.get_event_loop()
 
     # Run API server and bot together
-    api_task = loop.create_task(uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=10000, log_level="info")).serve())
+    api_task = loop.create_task(
+        uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=10000, log_level="info")).serve()
+    )
     bot_task = loop.create_task(bot.start(DISCORD_BOT_TOKEN))
 
     await asyncio.gather(api_task, bot_task)
