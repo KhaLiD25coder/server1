@@ -28,6 +28,24 @@ logging.basicConfig(
 )
 log = logging.getLogger("LicenseBot")
 
+# ================== DATE HELPER ==================
+def parse_expiry_to_ts(v):
+    """Accepts int timestamp, ISO date 'YYYY-MM-DD', or None -> int|None"""
+    if v is None or v == "":
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v)
+    s = str(v).strip()
+    if s.isdigit():  # plain int string
+        return int(s)
+    try:
+        dt = datetime.datetime.strptime(s, "%Y-%m-%d")
+        return int(dt.replace(tzinfo=datetime.timezone.utc).timestamp())
+    except ValueError:
+        return None
+
 # ================== DATABASE HELPERS ==================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -84,25 +102,6 @@ async def root():
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-def format_expiry(expiry_value):
-    """Convert expiry (int timestamp or date string) into human-readable date."""
-    if not expiry_value:
-        return "None"
-
-    # Try integer timestamp
-    try:
-        ts = int(expiry_value)
-        return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        pass
-
-    # Try parsing YYYY-MM-DD string
-    try:
-        dt = datetime.datetime.strptime(expiry_value, "%Y-%m-%d")
-        return dt.strftime("%Y-%m-%d")
-    except Exception:
-        return "Invalid"
-
 @bot.event
 async def on_ready():
     log.info(f"✅ Bot online as {bot.user}")
@@ -124,13 +123,19 @@ async def on_ready():
     rows = c.fetchall()
     conn.close()
 
+    now_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
     log.info("📜 Current Keys in Database (after startup):")
     if not rows:
         log.info("   (No keys found)")
     else:
         for row in rows:
-            exp_str = format_expiry(row[1])
-            log.info(f"   🔑 {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
+            exp_ts = parse_expiry_to_ts(row[1])
+            status = "❌ Expired" if exp_ts and exp_ts < now_ts else "✅ Active"
+            exp_str = (
+                datetime.datetime.fromtimestamp(exp_ts, datetime.timezone.utc).strftime("%Y-%m-%d")
+                if exp_ts else "None"
+            )
+            log.info(f"   🔑 {row[0]} | Expiry: {exp_str} | HWID: {row[2]} | {status}")
 
 # ========== SLASH COMMANDS ==========
 @bot.tree.command(name="listkeys", description="List all saved license keys")
@@ -144,34 +149,31 @@ async def listkeys(interaction: discord.Interaction):
     rows = c.fetchall()
     conn.close()
 
-    if not rows:
-        await interaction.followup.send("No keys found.", ephemeral=True)
-        return
-
-    now_ts = int(datetime.datetime.utcnow().timestamp())
+    now_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
     active, expired = [], []
 
     for row in rows:
-        exp_str = format_expiry(row[1])
-
-        # Check expiry
-        try:
-            expiry_ts = int(row[1])
-            if expiry_ts < now_ts:
-                expired.append(f"❌ {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
-            else:
-                active.append(f"✅ {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
-        except Exception:
-            expired.append(f"❌ {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
+        exp_ts = parse_expiry_to_ts(row[1])
+        exp_str = (
+            datetime.datetime.fromtimestamp(exp_ts, datetime.timezone.utc).strftime("%Y-%m-%d")
+            if exp_ts else "None"
+        )
+        entry = f"🔑 {row[0]} | Expiry: {exp_str} | HWID: {row[2]}"
+        if exp_ts and exp_ts < now_ts:
+            expired.append(entry)
+        else:
+            active.append(entry)
 
     msg = ""
     if active:
-        msg += "**✅ Active Keys:**\n" + "\n".join(active[:20]) + "\n\n"
+        msg += "✅ **Active Keys:**\n" + "\n".join(active) + "\n\n"
     if expired:
-        msg += "**❌ Expired Keys:**\n" + "\n".join(expired[:20])
+        msg += "❌ **Expired Keys:**\n" + "\n".join(expired)
+
+    if not msg:
+        msg = "No keys found."
 
     await interaction.followup.send(msg[:1900], ephemeral=True)
-    log.info("🟡 Sent list of keys")
 
 # ================== MAIN ==================
 async def main():
@@ -189,3 +191,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
