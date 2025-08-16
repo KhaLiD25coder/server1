@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 # ---------------- CONFIG ---------------- #
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # Put your bot token in Render env
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # must be set in Render env vars
 GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "1394437999596404748"))
 DB_PATH = "licenses.db"
 JSON_PATH = "licenses.json"
@@ -113,8 +113,6 @@ async def updatekey(interaction: discord.Interaction, key: str, expiry: int = No
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-
-    # Fetch current values
     c.execute("SELECT expiry_date, hwid FROM licenses WHERE key=?", (key,))
     row = c.fetchone()
 
@@ -149,11 +147,18 @@ async def home():
 
 # ---------------- MAIN ---------------- #
 async def main():
+    if not TOKEN:
+        raise ValueError("❌ DISCORD_BOT_TOKEN not set in environment variables")
+
     init_db()
     import_json_to_db()
 
+    # Use uvicorn.Server instead of uvicorn.run
+    config = uvicorn.Config(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)), loop="asyncio")
+    server = uvicorn.Server(config)
+
     bot_task = asyncio.create_task(bot.start(TOKEN))
-    uvicorn_task = asyncio.create_task(uvicorn.run(app, host="0.0.0.0", port=10000))
+    uvicorn_task = asyncio.create_task(server.serve())
 
     await asyncio.gather(bot_task, uvicorn_task)
 
