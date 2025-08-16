@@ -79,14 +79,14 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
 
-    # Log all keys after bot is ready
+    # Always log current keys after ready
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT key, expiry_date, hwid FROM licenses")
     rows = c.fetchall()
     conn.close()
 
-    print("📜 Current Keys in Database:")
+    print("📜 Current Keys in Database (after startup):")
     if not rows:
         print("   (No keys found)")
     else:
@@ -195,4 +195,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
