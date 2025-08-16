@@ -106,7 +106,7 @@ async def on_ready():
             print(f"   🔑 {row[0]} | Expiry: {row[1]} | HWID: {row[2]}")
 
 # ========== SLASH COMMANDS ==========
-@bot.tree.command(name="listkeys", description="List all saved license keys", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="listkeys", description="List all saved license keys")
 async def listkeys(interaction: discord.Interaction):
     print("🟡 /listkeys triggered")
     await interaction.response.defer(ephemeral=True)
@@ -125,7 +125,7 @@ async def listkeys(interaction: discord.Interaction):
     await interaction.followup.send(msg[:1900], ephemeral=True)
     print("🟡 Sent list of keys")
 
-@bot.tree.command(name="addkey", description="Add a new license key", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="addkey", description="Add a new license key")
 async def addkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY", expiry_date: Optional[int] = 1760000000, hwid: Optional[str] = None):
     print("🟡 /addkey triggered")
     await interaction.response.defer(ephemeral=True)
@@ -144,7 +144,7 @@ async def addkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KE
         print(f"❌ Error in /addkey: {e}")
         await interaction.followup.send("⚠️ Failed to add key", ephemeral=True)
 
-@bot.tree.command(name="delkey", description="Delete a license key", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="delkey", description="Delete a license key")
 async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
     print("🟡 /delkey triggered")
     await interaction.response.defer(ephemeral=True)
@@ -169,7 +169,7 @@ async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KE
         print(f"❌ Error in /delkey: {e}")
         await interaction.followup.send("⚠️ Failed to delete key", ephemeral=True)
 
-@bot.tree.command(name="resethwid", description="Reset the HWID for a license key", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="resethwid", description="Reset the HWID for a license key")
 async def resethwid(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
     print("🟡 /resethwid triggered")
     await interaction.response.defer(ephemeral=True)
@@ -204,3 +204,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
