@@ -1,4 +1,10 @@
 {
-    "ABC123-XYZ": 1760000000,
-    "DEF456-QWE": 1770000000
+    "ABC123-XYZ": {
+        "expiry_date": 1760000000,
+        "hwid": null
+    },
+    "DEF456-QWE": {
+        "expiry_date": 1770000000,
+        "hwid": null
+    }
 }
