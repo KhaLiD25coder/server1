@@ -24,17 +24,26 @@ DB_URL = os.getenv("DATABASE_URL")
 def init_db():
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
+
+    # Create table if not exists
     cur.execute("""
         CREATE TABLE IF NOT EXISTS licenses (
-            key TEXT PRIMARY KEY,
-            expiry BIGINT,
-            hwid TEXT
+            key TEXT PRIMARY KEY
         )
     """)
     conn.commit()
+
+    # Ensure required columns exist
+    try:
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS expiry BIGINT;")
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS hwid TEXT;")
+        conn.commit()
+    except Exception as e:
+        logging.error(f"⚠️ Failed to alter table: {e}")
+
     cur.close()
     conn.close()
-    logging.info("✅ Database initialized.")
+    logging.info("✅ Database initialized and schema ensured.")
 
 def add_key_db(key, expiry):
     conn = psycopg2.connect(DB_URL)
