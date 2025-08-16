@@ -5,6 +5,7 @@ import asyncio
 import logging
 from typing import Optional
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 import uvicorn
 import discord
 from discord.ext import commands
@@ -76,18 +77,15 @@ def export_db_to_json():
 app = FastAPI()
 
 @app.get("/")
+@app.head("/")
 async def root():
     return {"status": "ok", "message": "Bot + API running"}
 
 @app.get("/health")
-async def health():
-    """Check if API and bot are alive"""
-    return {
-        "api_status": "ok",
-        "bot_online": bot.is_ready(),
-        "bot_user": str(bot.user) if bot.user else None,
-        "guild_id": GUILD_ID,
-    }
+async def health_check():
+    if bot.is_ready():
+        return {"status": "ok", "bot": "online"}
+    return JSONResponse(status_code=503, content={"status": "error", "bot": "offline"})
 
 # ================== DISCORD BOT ==================
 intents = discord.Intents.default()
@@ -142,9 +140,8 @@ async def listkeys(interaction: discord.Interaction):
     log.info("🟡 Sent list of keys")
 
 @bot.tree.command(name="addkey", description="Add a new license key")
-async def addkey(interaction: discord.Interaction, key: str, expiry_date: int, hwid: Optional[str] = None):
+async def addkey(interaction: discord.Interaction, key: str, expiry_date: Optional[int] = 1760000000, hwid: Optional[str] = None):
     log.info("🟡 /addkey triggered")
-    await interaction.response.defer(ephemeral=True)
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -154,16 +151,15 @@ async def addkey(interaction: discord.Interaction, key: str, expiry_date: int, h
         conn.close()
         export_db_to_json()
 
-        await interaction.followup.send(f"✅ Key `{key}` added!", ephemeral=True)
+        await interaction.response.send_message(f"✅ Key `{key}` added!", ephemeral=True)
         log.info(f"🟡 Added key {key}")
     except Exception as e:
         log.error(f"❌ Error in /addkey: {e}")
-        await interaction.followup.send("⚠️ Failed to add key", ephemeral=True)
+        await interaction.response.send_message("⚠️ Failed to add key", ephemeral=True)
 
 @bot.tree.command(name="delkey", description="Delete a license key")
 async def delkey(interaction: discord.Interaction, key: str):
     log.info("🟡 /delkey triggered")
-    await interaction.response.defer(ephemeral=True)
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -175,20 +171,19 @@ async def delkey(interaction: discord.Interaction, key: str):
             conn.commit()
             conn.close()
             export_db_to_json()
-            await interaction.followup.send(f"🗑️ Key `{key}` deleted!", ephemeral=True)
+            await interaction.response.send_message(f"🗑️ Key `{key}` deleted!", ephemeral=True)
             log.info(f"🟡 Deleted key {key}")
         else:
             conn.close()
-            await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
+            await interaction.response.send_message(f"⚠️ Key `{key}` not found.", ephemeral=True)
             log.info("🟡 Key not found in DB")
     except Exception as e:
         log.error(f"❌ Error in /delkey: {e}")
-        await interaction.followup.send("⚠️ Failed to delete key", ephemeral=True)
+        await interaction.response.send_message("⚠️ Failed to delete key", ephemeral=True)
 
 @bot.tree.command(name="resethwid", description="Reset the HWID for a license key")
 async def resethwid(interaction: discord.Interaction, key: str):
     log.info("🟡 /resethwid triggered")
-    await interaction.response.defer(ephemeral=True)
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -198,11 +193,11 @@ async def resethwid(interaction: discord.Interaction, key: str):
         conn.close()
         export_db_to_json()
 
-        await interaction.followup.send(f"♻️ HWID reset for `{key}`!", ephemeral=True)
+        await interaction.response.send_message(f"♻️ HWID reset for `{key}`!", ephemeral=True)
         log.info(f"🟡 Reset HWID for key {key}")
     except Exception as e:
         log.error(f"❌ Error in /resethwid: {e}")
-        await interaction.followup.send("⚠️ Failed to reset HWID", ephemeral=True)
+        await interaction.response.send_message("⚠️ Failed to reset HWID", ephemeral=True)
 
 # ================== MAIN ==================
 async def main():
