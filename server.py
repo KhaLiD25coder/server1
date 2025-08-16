@@ -1,150 +1,168 @@
-import discord
-from discord.ext import commands
-from discord import app_commands
+import os
 import sqlite3
 import json
-import os
 import asyncio
-from datetime import datetime, timezone
-import uvicorn
+import discord
+from discord.ext import commands
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+import uvicorn
 
-# ===================== CONFIG =====================
-TOKEN = os.getenv("DISCORD_TOKEN")  # Set in Render/Env Vars
-GUILD_ID = 1394437999596404748  # Your server ID
-ADMIN_ID = 1240624476949975218  # Your Discord user ID
-DB_PATH = "licenses.db"
-JSON_PATH = "licenses.json"
+DB_FILE = "licenses.db"
+LICENSES_FILE = "licenses.json"
 
-# ===================== DATABASE =====================
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS licenses (
-                    key TEXT PRIMARY KEY,
-                    expiry_date TEXT,
-                    hwid TEXT
-                )''')
-    conn.commit()
-    conn.close()
-
-def import_json_to_db():
-    if os.path.exists(JSON_PATH):
-        with open(JSON_PATH, "r") as f:
-            data = json.load(f)
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        for key, info in data.items():
-            c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, ?)",
-                      (key, info.get("expiry_date"), info.get("hwid")))
-        conn.commit()
-        conn.close()
-
-def export_db_to_json():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT key, expiry_date, hwid FROM licenses")
-    rows = c.fetchall()
-    conn.close()
-    data = {key: {"expiry_date": expiry, "hwid": hwid} for key, expiry, hwid in rows}
-    with open(JSON_PATH, "w") as f:
-        json.dump(data, f, indent=4)
-
-# ===================== BOT SETUP =====================
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-@bot.event
-async def on_ready():
-    try:
-        guild = discord.Object(id=GUILD_ID)
-        await bot.tree.sync(guild=guild)  # Only sync to your server
-        print(f"✅ Slash commands synced to guild {GUILD_ID}", flush=True)
-    except Exception as e:
-        print(f"❌ Command sync failed: {e}", flush=True)
+app = FastAPI()
 
-    print(f"🤖 Bot online as {bot.user}", flush=True)
 
-    # Show live keys
-    conn = sqlite3.connect(DB_PATH)
+# ---------------- JSON <-> DB Sync ----------------
+def import_json_to_db():
+    """Load licenses.json into DB on startup (only if not already present)."""
+    if not os.path.exists(LICENSES_FILE):
+        print("[DEBUG] licenses.json not found, skipping import")
+        return
+
+    with open(LICENSES_FILE, "r") as f:
+        data = json.load(f)
+
+    conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT key, expiry_date, hwid FROM licenses")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS licenses (
+            license_key TEXT PRIMARY KEY,
+            expiry_date INTEGER,
+            hwid TEXT
+        )
+    """)
+
+    for key, info in data.items():
+        c.execute("INSERT OR REPLACE INTO licenses (license_key, expiry_date, hwid) VALUES (?, ?, ?)",
+                  (key, info.get("expiry_date"), info.get("hwid")))
+
+    conn.commit()
+    conn.close()
+    print(f"[DEBUG] Imported {len(data)} keys from JSON.")
+
+
+def export_db_to_json():
+    """Save DB state to licenses.json."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT license_key, expiry_date, hwid FROM licenses")
     rows = c.fetchall()
     conn.close()
 
-    now = datetime.now(timezone.utc)
-    live_keys = [
-        f"{key} (expires {expiry_date}, HWID: {hwid or 'None'})"
-        for key, expiry_date, hwid in rows
-        if datetime.strptime(expiry_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) >= now
-    ]
+    data = {}
+    for key, expiry, hwid in rows:
+        data[key] = {
+            "expiry_date": expiry,
+            "hwid": hwid
+        }
 
-    if live_keys:
-        print("🔑 Live keys on startup:")
-        for k in live_keys:
-            print(f"   • {k}")
-    else:
-        print("🚫 No keys live on startup.")
+    with open(LICENSES_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+    print(f"[DEBUG] Exported {len(rows)} keys to JSON.")
 
-# ===================== COMMANDS =====================
-@bot.tree.command(name="listkeys", description="List all license keys", guild=discord.Object(id=GUILD_ID))
-async def listkeys(interaction: discord.Interaction):
-    conn = sqlite3.connect(DB_PATH)
+
+def sync_after_change():
+    export_db_to_json()
+
+
+# ---------------- FastAPI Routes ----------------
+@app.get("/")
+async def root():
+    return {"message": "License server is running!"}
+
+
+@app.get("/verify")
+async def verify(key: str, hwid: str = None):
+    conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT key, expiry_date, hwid FROM licenses")
+    c.execute("SELECT expiry_date, hwid FROM licenses WHERE license_key = ?", (key,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return JSONResponse({"valid": False, "reason": "Invalid key"})
+
+    expiry, bound_hwid = row
+    if expiry and expiry < int(asyncio.get_event_loop().time()):
+        return JSONResponse({"valid": False, "reason": "Key expired"})
+
+    if bound_hwid and hwid != bound_hwid:
+        return JSONResponse({"valid": False, "reason": "HWID mismatch"})
+
+    return JSONResponse({"valid": True, "expiry_date": expiry})
+
+
+# ---------------- Discord Bot Commands ----------------
+@bot.event
+async def on_ready():
+    try:
+        guild = discord.Object(id=int(os.getenv("DISCORD_GUILD_ID")))
+        bot.tree.copy_global_to(guild=guild)
+        await bot.tree.sync(guild=guild)
+        print(f"✅ Slash commands synced to guild {guild.id}")
+    except Exception as e:
+        print(f"❌ Command sync failed: {e}")
+
+    print(f"🤖 Bot online as {bot.user}")
+
+
+@bot.tree.command(name="addkey", description="Add a new license key")
+async def addkey(interaction: discord.Interaction, key: str, expiry: int, hwid: str = None):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO licenses (license_key, expiry_date, hwid) VALUES (?, ?, ?)",
+              (key, expiry, hwid))
+    conn.commit()
+    conn.close()
+    sync_after_change()
+    await interaction.response.send_message(f"✅ Key `{key}` added.")
+
+
+@bot.tree.command(name="delkey", description="Delete a license key")
+async def delkey(interaction: discord.Interaction, key: str):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM licenses WHERE license_key = ?", (key,))
+    conn.commit()
+    conn.close()
+    sync_after_change()
+    await interaction.response.send_message(f"🗑️ Key `{key}` deleted.")
+
+
+@bot.tree.command(name="listkeys", description="List all license keys")
+async def listkeys(interaction: discord.Interaction):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT license_key, expiry_date, hwid FROM licenses")
     rows = c.fetchall()
     conn.close()
 
     if not rows:
-        await interaction.response.send_message("🚫 No keys found.", ephemeral=True)
+        await interaction.response.send_message("No keys found.")
         return
 
-    now = datetime.now(timezone.utc)
-    msg = ""
-    for key, expiry_date, hwid in rows:
-        expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        status = "✅ Active" if expiry_dt >= now else "❌ Expired"
-        msg += f"**{key}** - Expires: {expiry_date} - HWID: {hwid or 'None'} - {status}\n"
+    msg = "\n".join([f"🔑 {r[0]} | Expiry: {r[1]} | HWID: {r[2]}" for r in rows])
+    await interaction.response.send_message(f"**Stored Keys:**\n{msg}")
 
-    await interaction.response.send_message(msg, ephemeral=True)
 
-# ===== New Command to Re-Sync Commands =====
-@bot.tree.command(name="synccommands", description="Force re-sync slash commands", guild=discord.Object(id=GUILD_ID))
-async def synccommands(interaction: discord.Interaction):
-    if interaction.user.id != ADMIN_ID:
-        await interaction.response.send_message("🚫 You are not authorized to run this command.", ephemeral=True)
-        return
-    try:
-        guild = discord.Object(id=GUILD_ID)
-        await bot.tree.sync(guild=guild)
-        await interaction.response.send_message("✅ Slash commands synced successfully!", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Failed to sync commands: {e}", ephemeral=True)
-
-# ===================== FASTAPI SERVER =====================
-app = FastAPI()
-
-@app.get("/")
-async def root():
-    return {"status": "Bot is running"}
-
-# ===================== MAIN =====================
-async def start_bot():
-    await bot.start(TOKEN)
-
+# ---------------- Main Runner ----------------
 async def main():
-    init_db()
     import_json_to_db()
-    export_db_to_json()
 
-    bot_task = asyncio.create_task(start_bot())
-    uvicorn_task = asyncio.create_task(
-        uvicorn.Server(
-            uvicorn.Config(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
-        ).serve()
-    )
+    uvicorn_config = uvicorn.Config(app=app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    uvicorn_server = uvicorn.Server(config=uvicorn_config)
+
+    bot_task = asyncio.create_task(bot.start(os.getenv("DISCORD_BOT_TOKEN")))
+    uvicorn_task = asyncio.create_task(uvicorn_server.serve())
 
     await asyncio.gather(bot_task, uvicorn_task)
 
+
 if __name__ == "__main__":
     asyncio.run(main())
+
