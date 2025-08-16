@@ -1,188 +1,137 @@
 import os
-import time
-import logging
 import asyncio
-import discord
+import logging
 import psycopg2
-from fastapi import FastAPI, Query
-import uvicorn
-from typing import Optional
+import discord
+from discord import app_commands
+from discord.ext import commands
+from fastapi import FastAPI
+from uvicorn import Config, Server
 
-# -------------------------------------------------
-# Logging
-# -------------------------------------------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("LicenseBot")
+# ---------- Logging ----------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 
-# -------------------------------------------------
-# FastAPI
-# -------------------------------------------------
-app = FastAPI()
-
-# -------------------------------------------------
-# Database (PostgreSQL)
-# -------------------------------------------------
+# ---------- Config ----------
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+GUILD_ID = int(os.getenv("GUILD_ID", 0))
 DB_URL = os.getenv("DATABASE_URL")
 
+# ---------- Database ----------
 def init_db():
     conn = psycopg2.connect(DB_URL)
-    c = conn.cursor()
-    c.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS licenses (
             key TEXT PRIMARY KEY,
-            expiry_date BIGINT,
+            expiry BIGINT,
             hwid TEXT
         )
     """)
     conn.commit()
+    cur.close()
     conn.close()
-    log.info("✅ Database initialized.")
+    logging.info("✅ Database initialized.")
 
-init_db()
-
-# Utility: log current keys
-def log_all_keys():
+def add_key_db(key, expiry):
     conn = psycopg2.connect(DB_URL)
-    c = conn.cursor()
-    c.execute("SELECT key, expiry_date, hwid FROM licenses")
-    rows = c.fetchall()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO licenses (key, expiry, hwid) VALUES (%s, %s, %s) ON CONFLICT (key) DO NOTHING", (key, expiry, None))
+    conn.commit()
+    cur.close()
     conn.close()
+    logging.info(f"🟡 Added key {key}")
 
-    log.info("📜 Current Keys in Database:")
-    if not rows:
-        log.info("   (no keys found)")
-        return
-    for k, expiry, hwid in rows:
-        exp_str = time.strftime('%Y-%m-%d', time.localtime(expiry)) if expiry else "None"
-        log.info(f"   🔑 {k} | Expiry: {exp_str} | HWID: {hwid}")
+def list_keys_db():
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT key, expiry, hwid FROM licenses")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
 
-# -------------------------------------------------
-# Discord Bot
-# -------------------------------------------------
-TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+def remove_key_db(key):
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM licenses WHERE key=%s", (key,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    logging.info(f"🔴 Removed key {key}")
 
+def reset_hwid_db(key):
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor()
+    cur.execute("UPDATE licenses SET hwid=NULL WHERE key=%s", (key,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    logging.info(f"🟠 Reset HWID for {key}")
+
+# ---------- Discord Bot ----------
 intents = discord.Intents.default()
-bot = discord.Client(intents=intents)
-tree = discord.app_commands.CommandTree(bot)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# -------------------------------------------------
-# API Endpoint for Autojoiner
-# -------------------------------------------------
-@app.get("/verify")
-async def verify(key: str = Query(...), hwid: Optional[str] = None):
-    conn = psycopg2.connect(DB_URL)
-    c = conn.cursor()
-    c.execute("SELECT expiry_date, hwid FROM licenses WHERE key=%s", (key,))
-    row = c.fetchone()
-    conn.close()
-
-    if not row:
-        return {"status": "invalid"}
-
-    expiry, saved_hwid = row
-
-    # Expiry check
-    if expiry and expiry < int(time.time()):
-        return {"status": "expired"}
-
-    # HWID mismatch
-    if saved_hwid and saved_hwid != hwid:
-        return {"status": "hwid_mismatch"}
-
-    # Bind HWID if first use
-    if not saved_hwid and hwid:
-        conn = psycopg2.connect(DB_URL)
-        c = conn.cursor()
-        c.execute("UPDATE licenses SET hwid=%s WHERE key=%s", (hwid, key))
-        conn.commit()
-        conn.close()
-
-    return {"status": "valid"}
-
-# -------------------------------------------------
-# Slash Commands
-# -------------------------------------------------
-@tree.command(name="addkey", description="Add a new license key")
-async def addkey(interaction: discord.Interaction, key: str, expiry: int):
-    conn = psycopg2.connect(DB_URL)
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO licenses (key, expiry_date, hwid)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (key) DO UPDATE SET expiry_date=EXCLUDED.expiry_date
-    """, (key, expiry, None))
-    conn.commit()
-    conn.close()
-
-    log.info(f"🟡 Added key {key}")
-    log_all_keys()
-    await interaction.response.send_message(f"✅ Key `{key}` added with expiry `{expiry}`", ephemeral=True)
-
-
-@tree.command(name="delkey", description="Delete a license key")
-async def delkey(interaction: discord.Interaction, key: str):
-    conn = psycopg2.connect(DB_URL)
-    c = conn.cursor()
-    c.execute("DELETE FROM licenses WHERE key=%s", (key,))
-    conn.commit()
-    conn.close()
-
-    log.info(f"🟡 Deleted key {key}")
-    log_all_keys()
-    await interaction.response.send_message(f"🗑️ Key `{key}` deleted", ephemeral=True)
-
-
-@tree.command(name="resethwid", description="Reset HWID for a license key")
-async def resethwid(interaction: discord.Interaction, key: str):
-    conn = psycopg2.connect(DB_URL)
-    c = conn.cursor()
-    c.execute("UPDATE licenses SET hwid=NULL WHERE key=%s", (key,))
-    conn.commit()
-    conn.close()
-
-    log.info(f"🟡 Reset HWID for {key}")
-    log_all_keys()
-    await interaction.response.send_message(f"🔄 HWID reset for `{key}`", ephemeral=True)
-
-
-@tree.command(name="listkeys", description="List all license keys")
-async def listkeys(interaction: discord.Interaction):
-    conn = psycopg2.connect(DB_URL)
-    c = conn.cursor()
-    c.execute("SELECT key, expiry_date, hwid FROM licenses")
-    rows = c.fetchall()
-    conn.close()
-
-    if not rows:
-        await interaction.response.send_message("📭 No keys found", ephemeral=True)
-        return
-
-    response = "📜 **License Keys:**\n"
-    for k, expiry, hwid in rows:
-        exp_str = time.strftime('%Y-%m-%d', time.localtime(expiry)) if expiry else "None"
-        response += f"🔑 `{k}` | Expiry: {exp_str} | HWID: {hwid}\n"
-
-    await interaction.response.send_message(response, ephemeral=True)
-
-# -------------------------------------------------
-# Bot Events
-# -------------------------------------------------
 @bot.event
 async def on_ready():
-    await tree.sync()
-    log.info(f"✅ Bot online as {bot.user}")
-    log_all_keys()
+    logging.info(f"✅ Bot online as {bot.user}")
+    try:
+        synced = await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+        logging.info(f"🌍 Synced {len(synced)} commands to guild {GUILD_ID}")
+    except Exception as e:
+        logging.error(f"Failed to sync commands: {e}")
 
-# -------------------------------------------------
-# Main
-# -------------------------------------------------
+@bot.tree.command(name="listkeys", description="List all license keys", guild=discord.Object(id=GUILD_ID))
+async def listkeys(interaction: discord.Interaction):
+    rows = list_keys_db()
+    if not rows:
+        await interaction.response.send_message("No keys found.", ephemeral=True)
+    else:
+        msg = "\n".join([f"🔑 {k} | Expiry: {e} | HWID: {h}" for k, e, h in rows])
+        await interaction.response.send_message(msg, ephemeral=True)
+
+@bot.tree.command(name="addkey", description="Add a new license key", guild=discord.Object(id=GUILD_ID))
+async def addkey(interaction: discord.Interaction, key: str, expiry: int):
+    add_key_db(key, expiry)
+    await interaction.response.send_message(f"✅ Key `{key}` added.", ephemeral=True)
+
+@bot.tree.command(name="removekey", description="Remove a license key", guild=discord.Object(id=GUILD_ID))
+async def removekey(interaction: discord.Interaction, key: str):
+    remove_key_db(key)
+    await interaction.response.send_message(f"❌ Key `{key}` removed.", ephemeral=True)
+
+@bot.tree.command(name="resethwid", description="Reset HWID for a license key", guild=discord.Object(id=GUILD_ID))
+async def resethwid(interaction: discord.Interaction, key: str):
+    reset_hwid_db(key)
+    await interaction.response.send_message(f"🟠 HWID reset for `{key}`.", ephemeral=True)
+
+# ---------- FastAPI ----------
+app = FastAPI()
+
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "License server running"}
+
+# ---------- Main ----------
 async def main():
-    api_task = asyncio.create_task(
-        uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)), log_level="info")
-    )
-    bot_task = asyncio.create_task(bot.start(TOKEN))
-    await asyncio.gather(api_task, bot_task)
+    init_db()
+
+    # log keys at startup
+    rows = list_keys_db()
+    logging.info("📜 Current Keys in Database (after startup):")
+    for k, e, h in rows:
+        logging.info(f"   🔑 {k} | Expiry: {e} | HWID: {h}")
+
+    # run both bot + API server
+    bot_task = asyncio.create_task(bot.start(DISCORD_TOKEN))
+    config = Config(app=app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)), log_level="info")
+    server = Server(config)
+    api_task = asyncio.create_task(server.serve())
+    await asyncio.gather(bot_task, api_task)
 
 if __name__ == "__main__":
     asyncio.run(main())
