@@ -3,13 +3,12 @@ import json
 import sqlite3
 import asyncio
 import logging
+import datetime
 from typing import Optional
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 import uvicorn
 import discord
 from discord.ext import commands
-from datetime import datetime, timedelta
 
 # ================== CONFIG ==================
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -81,29 +80,24 @@ app = FastAPI()
 async def root():
     return {"status": "ok", "message": "Bot + API running"}
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-# ✅ License verification endpoint
+# --------- NEW VERIFY ENDPOINT ---------
 @app.get("/verify/{key}")
 async def verify_key(key: str):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT expiry_date, hwid FROM licenses WHERE key=?", (key,))
+    c.execute("SELECT key, expiry_date, hwid FROM licenses WHERE key=?", (key,))
     row = c.fetchone()
     conn.close()
 
     if not row:
-        return JSONResponse(status_code=404, content={"status": "invalid", "message": "Key not found"})
+        return {"status": "invalid", "message": "Key not found"}
 
-    expiry, hwid = row
-    now_ts = int(datetime.now().timestamp())
+    expiry = row[1]
+    now_ts = int(datetime.datetime.utcnow().timestamp())
+    if expiry and expiry < now_ts:
+        return {"status": "expired", "message": "Key expired"}
 
-    if expiry and int(expiry) < now_ts:
-        return JSONResponse(status_code=403, content={"status": "expired", "message": "Key expired"})
-
-    return {"status": "valid", "expiry_date": expiry, "hwid": hwid}
+    return {"status": "valid", "message": "Key is valid"}
 
 # ================== DISCORD BOT ==================
 intents = discord.Intents.default()
@@ -134,10 +128,9 @@ async def on_ready():
     if not rows:
         log.info("   (No keys found)")
     else:
-        now_ts = int(datetime.now().timestamp())
         for row in rows:
-            status = "✅ ACTIVE" if row[1] and int(row[1]) > now_ts else "❌ EXPIRED"
-            log.info(f"   🔑 {row[0]} | Expiry: {row[1]} | HWID: {row[2]} | {status}")
+            exp_str = datetime.datetime.utcfromtimestamp(row[1]).strftime("%Y-%m-%d") if row[1] else "None"
+            log.info(f"   🔑 {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
 
 # ========== SLASH COMMANDS ==========
 @bot.tree.command(name="listkeys", description="List all saved license keys")
@@ -151,39 +144,41 @@ async def listkeys(interaction: discord.Interaction):
     rows = c.fetchall()
     conn.close()
 
-    now_ts = int(datetime.now().timestamp())
-    active_keys = []
-    expired_keys = []
+    if not rows:
+        await interaction.followup.send("No keys found.", ephemeral=True)
+        return
 
+    now_ts = int(datetime.datetime.utcnow().timestamp())
+    active = []
+    expired = []
     for row in rows:
-        expiry = row[1]
-        if expiry and int(expiry) < now_ts:
-            expired_keys.append(f"❌ {row[0]} | Expiry: {expiry} | HWID: {row[2]}")
+        exp_str = datetime.datetime.utcfromtimestamp(row[1]).strftime("%Y-%m-%d") if row[1] else "None"
+        if row[1] and row[1] < now_ts:
+            expired.append(f"❌ {row[0]} | Expired: {exp_str} | HWID: {row[2]}")
         else:
-            active_keys.append(f"✅ {row[0]} | Expiry: {expiry} | HWID: {row[2]}")
+            active.append(f"✅ {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
 
-    msg = "**Active Keys:**\n" + ("\n".join(active_keys) if active_keys else "None") + "\n\n"
-    msg += "**Expired Keys:**\n" + ("\n".join(expired_keys) if expired_keys else "None")
-
+    msg = "**✅ Active Keys:**\n" + ("\n".join(active) if active else "(None)")
+    msg += "\n\n**❌ Expired Keys:**\n" + ("\n".join(expired) if expired else "(None)")
     await interaction.followup.send(msg[:1900], ephemeral=True)
 
-@bot.tree.command(name="addkey", description="Add a new license key (expiry in days)")
+@bot.tree.command(name="addkey", description="Add a new license key")
 async def addkey(interaction: discord.Interaction, key: str, days: int, hwid: Optional[str] = None):
     log.info("🟡 /addkey triggered")
     await interaction.response.defer(ephemeral=True)
 
     try:
-        expiry_date = int((datetime.now() + timedelta(days=days)).timestamp())
-
+        expiry_ts = int((datetime.datetime.utcnow() + datetime.timedelta(days=days)).timestamp())
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, ?)", (key, expiry_date, hwid))
+        c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, ?)", (key, expiry_ts, hwid))
         conn.commit()
         conn.close()
         export_db_to_json()
 
-        await interaction.followup.send(f"✅ Key `{key}` added! Expiry in {days} days.", ephemeral=True)
-        log.info(f"🟡 Added key {key}, expires in {days} days")
+        exp_str = datetime.datetime.utcfromtimestamp(expiry_ts).strftime("%Y-%m-%d")
+        await interaction.followup.send(f"✅ Key `{key}` added! Expiry: {exp_str}", ephemeral=True)
+        log.info(f"🟡 Added key {key} (Expiry: {exp_str})")
     except Exception as e:
         log.error(f"❌ Error in /addkey: {e}")
         await interaction.followup.send("⚠️ Failed to add key", ephemeral=True)
