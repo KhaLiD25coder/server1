@@ -2,6 +2,7 @@ import os
 import json
 import sqlite3
 import asyncio
+import logging
 from typing import Optional
 from fastapi import FastAPI
 import uvicorn
@@ -17,6 +18,14 @@ JSON_PATH = "licenses.json"
 
 if not DISCORD_BOT_TOKEN:
     raise ValueError("❌ DISCORD_BOT_TOKEN not set in environment variables")
+
+# ================== LOGGING ==================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S"
+)
+log = logging.getLogger("LicenseBot")
 
 # ================== DATABASE HELPERS ==================
 def init_db():
@@ -59,9 +68,9 @@ def export_db_to_json():
         with open(JSON_PATH, "w") as f:
             json.dump(data, f, indent=2)
 
-        print("💾 licenses.json updated successfully.")
+        log.info("💾 licenses.json updated successfully.")
     except Exception as e:
-        print(f"❌ Failed to export DB to JSON: {e}")
+        log.error(f"❌ Failed to export DB to JSON: {e}")
 
 # ================== FASTAPI APP ==================
 app = FastAPI()
@@ -76,39 +85,36 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot online as {bot.user}")
+    log.info(f"✅ Bot online as {bot.user}")
     try:
-        # Sync to guild
         guild = discord.Object(id=GUILD_ID)
         synced_guild = await bot.tree.sync(guild=guild)
-        print(f"✅ Synced {len(synced_guild)} commands to guild {GUILD_ID}:")
+        log.info(f"✅ Synced {len(synced_guild)} commands to guild {GUILD_ID}")
         for cmd in synced_guild:
-            print(f"   • /{cmd.name} — {cmd.description}")
+            log.info(f"   • /{cmd.name} — {cmd.description}")
 
-        # Sync globally
         synced_global = await bot.tree.sync()
-        print(f"🌍 Synced {len(synced_global)} global commands")
+        log.info(f"🌍 Synced {len(synced_global)} global commands")
     except Exception as e:
-        print(f"❌ Failed to sync commands: {e}")
+        log.error(f"❌ Failed to sync commands: {e}")
 
-    # Log DB contents
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT key, expiry_date, hwid FROM licenses")
     rows = c.fetchall()
     conn.close()
 
-    print("📜 Current Keys in Database (after startup):")
+    log.info("📜 Current Keys in Database (after startup):")
     if not rows:
-        print("   (No keys found)")
+        log.info("   (No keys found)")
     else:
         for row in rows:
-            print(f"   🔑 {row[0]} | Expiry: {row[1]} | HWID: {row[2]}")
+            log.info(f"   🔑 {row[0]} | Expiry: {row[1]} | HWID: {row[2]}")
 
 # ========== SLASH COMMANDS ==========
 @bot.tree.command(name="listkeys", description="List all saved license keys")
 async def listkeys(interaction: discord.Interaction):
-    print("🟡 /listkeys triggered")
+    log.info("🟡 /listkeys triggered")
     await interaction.response.defer(ephemeral=True)
 
     conn = sqlite3.connect(DB_PATH)
@@ -123,11 +129,11 @@ async def listkeys(interaction: discord.Interaction):
 
     msg = "\n".join([f"🔑 {row[0]} | Expiry: {row[1]} | HWID: {row[2]}" for row in rows])
     await interaction.followup.send(msg[:1900], ephemeral=True)
-    print("🟡 Sent list of keys")
+    log.info("🟡 Sent list of keys")
 
 @bot.tree.command(name="addkey", description="Add a new license key")
 async def addkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY", expiry_date: Optional[int] = 1760000000, hwid: Optional[str] = None):
-    print("🟡 /addkey triggered")
+    log.info("🟡 /addkey triggered")
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -139,14 +145,14 @@ async def addkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KE
         export_db_to_json()
 
         await interaction.followup.send(f"✅ Key `{key}` added!", ephemeral=True)
-        print(f"🟡 Added key {key}")
+        log.info(f"🟡 Added key {key}")
     except Exception as e:
-        print(f"❌ Error in /addkey: {e}")
+        log.error(f"❌ Error in /addkey: {e}")
         await interaction.followup.send("⚠️ Failed to add key", ephemeral=True)
 
 @bot.tree.command(name="delkey", description="Delete a license key")
 async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
-    print("🟡 /delkey triggered")
+    log.info("🟡 /delkey triggered")
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -160,18 +166,18 @@ async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KE
             conn.close()
             export_db_to_json()
             await interaction.followup.send(f"🗑️ Key `{key}` deleted!", ephemeral=True)
-            print(f"🟡 Deleted key {key}")
+            log.info(f"🟡 Deleted key {key}")
         else:
             conn.close()
             await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
-            print("🟡 Key not found in DB")
+            log.info("🟡 Key not found in DB")
     except Exception as e:
-        print(f"❌ Error in /delkey: {e}")
+        log.error(f"❌ Error in /delkey: {e}")
         await interaction.followup.send("⚠️ Failed to delete key", ephemeral=True)
 
 @bot.tree.command(name="resethwid", description="Reset the HWID for a license key")
 async def resethwid(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
-    print("🟡 /resethwid triggered")
+    log.info("🟡 /resethwid triggered")
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -183,9 +189,9 @@ async def resethwid(interaction: discord.Interaction, key: Optional[str] = "TEST
         export_db_to_json()
 
         await interaction.followup.send(f"♻️ HWID reset for `{key}`!", ephemeral=True)
-        print(f"🟡 Reset HWID for key {key}")
+        log.info(f"🟡 Reset HWID for key {key}")
     except Exception as e:
-        print(f"❌ Error in /resethwid: {e}")
+        log.error(f"❌ Error in /resethwid: {e}")
         await interaction.followup.send("⚠️ Failed to reset HWID", ephemeral=True)
 
 # ================== MAIN ==================
@@ -204,4 +210,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
