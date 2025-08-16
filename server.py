@@ -2,6 +2,7 @@ import os
 import json
 import sqlite3
 import asyncio
+from typing import Optional
 from fastapi import FastAPI
 import uvicorn
 import discord
@@ -48,15 +49,20 @@ def import_json_to_db():
     conn.close()
 
 def export_db_to_json():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT key, expiry_date, hwid FROM licenses")
-    rows = c.fetchall()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT key, expiry_date, hwid FROM licenses")
+        rows = c.fetchall()
+        conn.close()
 
-    data = {row[0]: {"expiry_date": row[1], "hwid": row[2]} for row in rows}
-    with open(JSON_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+        data = {row[0]: {"expiry_date": row[1], "hwid": row[2]} for row in rows}
+        with open(JSON_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+
+        print("💾 licenses.json updated successfully.")
+    except Exception as e:
+        print(f"❌ Failed to export DB to JSON: {e}")
 
 # ================== FASTAPI APP ==================
 app = FastAPI()
@@ -114,11 +120,14 @@ async def listkeys(interaction: discord.Interaction):
 @bot.tree.command(name="addkey", description="Add a new license key", guild=discord.Object(id=GUILD_ID))
 async def addkey(
     interaction: discord.Interaction,
-    key: str = "TEST-KEY",                     # default test key
-    expiry_date: int = 1760000000,             # default expiry date
-    hwid: str = None                           # optional
+    key: Optional[str] = "TEST-KEY",
+    expiry_date: Optional[int] = 1760000000,
+    hwid: Optional[str] = None
 ):
     await interaction.response.defer(ephemeral=True)
+
+    key = key or "TEST-KEY"
+    expiry_date = expiry_date or 1760000000
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -131,8 +140,10 @@ async def addkey(
     await interaction.followup.send(f"✅ Key `{key}` added!", ephemeral=True)
 
 @bot.tree.command(name="delkey", description="Delete a license key", guild=discord.Object(id=GUILD_ID))
-async def delkey(interaction: discord.Interaction, key: str = "TEST-KEY"):
+async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
     await interaction.response.defer(ephemeral=True)
+
+    key = key or "TEST-KEY"
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -150,8 +161,10 @@ async def delkey(interaction: discord.Interaction, key: str = "TEST-KEY"):
         await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
 
 @bot.tree.command(name="resethwid", description="Reset the HWID for a license key", guild=discord.Object(id=GUILD_ID))
-async def resethwid(interaction: discord.Interaction, key: str = "TEST-KEY"):
+async def resethwid(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
     await interaction.response.defer(ephemeral=True)
+
+    key = key or "TEST-KEY"
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -195,3 +208,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
