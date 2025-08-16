@@ -1,4 +1,5 @@
 discord.py==2.3.2
-fastapi
-uvicorn
-psycopg2-binary
+fastapi==0.110.0
+uvicorn==0.29.0
+psycopg2-binary==2.9.9
+
