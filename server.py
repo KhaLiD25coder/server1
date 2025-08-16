@@ -3,12 +3,12 @@ import json
 import sqlite3
 import asyncio
 import logging
+import datetime
 from typing import Optional
 from fastapi import FastAPI
 import uvicorn
 import discord
 from discord.ext import commands
-import datetime
 
 # ================== CONFIG ==================
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -35,7 +35,7 @@ def init_db():
     c.execute(
         """CREATE TABLE IF NOT EXISTS licenses (
             key TEXT PRIMARY KEY,
-            expiry_date INTEGER,
+            expiry_date TEXT,
             hwid TEXT
         )"""
     )
@@ -76,14 +76,32 @@ def export_db_to_json():
 # ================== FASTAPI APP ==================
 app = FastAPI()
 
-# ✅ Fix for UptimeRobot HEAD requests
-@app.api_route("/", methods=["GET", "HEAD"])
+@app.get("/")
 async def root():
     return {"status": "ok", "message": "Bot + API running"}
 
 # ================== DISCORD BOT ==================
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+def format_expiry(expiry_value):
+    """Convert expiry (int timestamp or date string) into human-readable date."""
+    if not expiry_value:
+        return "None"
+
+    # Try integer timestamp
+    try:
+        ts = int(expiry_value)
+        return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        pass
+
+    # Try parsing YYYY-MM-DD string
+    try:
+        dt = datetime.datetime.strptime(expiry_value, "%Y-%m-%d")
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return "Invalid"
 
 @bot.event
 async def on_ready():
@@ -110,11 +128,9 @@ async def on_ready():
     if not rows:
         log.info("   (No keys found)")
     else:
-        now_ts = int(datetime.datetime.utcnow().timestamp())
         for row in rows:
-            exp_str = datetime.datetime.utcfromtimestamp(int(row[1])).strftime("%Y-%m-%d") if row[1] else "None"
-            status = "✅ ACTIVE" if row[1] and int(row[1]) > now_ts else "❌ EXPIRED"
-            log.info(f"   🔑 {row[0]} | Expiry: {exp_str} | HWID: {row[2]} | {status}")
+            exp_str = format_expiry(row[1])
+            log.info(f"   🔑 {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
 
 # ========== SLASH COMMANDS ==========
 @bot.tree.command(name="listkeys", description="List all saved license keys")
@@ -133,90 +149,29 @@ async def listkeys(interaction: discord.Interaction):
         return
 
     now_ts = int(datetime.datetime.utcnow().timestamp())
-    active = []
-    expired = []
+    active, expired = [], []
 
     for row in rows:
-        exp_str = datetime.datetime.utcfromtimestamp(int(row[1])).strftime("%Y-%m-%d") if row[1] else "None"
-        if row[1] and int(row[1]) > now_ts:
-            active.append(f"✅ {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
-        else:
+        exp_str = format_expiry(row[1])
+
+        # Check expiry
+        try:
+            expiry_ts = int(row[1])
+            if expiry_ts < now_ts:
+                expired.append(f"❌ {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
+            else:
+                active.append(f"✅ {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
+        except Exception:
             expired.append(f"❌ {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
 
     msg = ""
     if active:
-        msg += "**✅ Active Keys:**\n" + "\n".join(active) + "\n\n"
+        msg += "**✅ Active Keys:**\n" + "\n".join(active[:20]) + "\n\n"
     if expired:
-        msg += "**❌ Expired Keys:**\n" + "\n".join(expired)
+        msg += "**❌ Expired Keys:**\n" + "\n".join(expired[:20])
 
     await interaction.followup.send(msg[:1900], ephemeral=True)
     log.info("🟡 Sent list of keys")
-
-@bot.tree.command(name="addkey", description="Add a new license key")
-async def addkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY", days: Optional[int] = 30, hwid: Optional[str] = None):
-    log.info("🟡 /addkey triggered")
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        expiry_date = int((datetime.datetime.utcnow() + datetime.timedelta(days=days)).timestamp())
-
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, ?)", (key, expiry_date, hwid))
-        conn.commit()
-        conn.close()
-        export_db_to_json()
-
-        exp_str = datetime.datetime.utcfromtimestamp(expiry_date).strftime("%Y-%m-%d")
-        await interaction.followup.send(f"✅ Key `{key}` added! Expiry: {exp_str}", ephemeral=True)
-        log.info(f"🟡 Added key {key}, expires on {exp_str}")
-    except Exception as e:
-        log.error(f"❌ Error in /addkey: {e}")
-        await interaction.followup.send("⚠️ Failed to add key", ephemeral=True)
-
-@bot.tree.command(name="delkey", description="Delete a license key")
-async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
-    log.info("🟡 /delkey triggered")
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT key FROM licenses WHERE key=?", (key,))
-        exists = c.fetchone()
-        if exists:
-            c.execute("DELETE FROM licenses WHERE key=?", (key,))
-            conn.commit()
-            conn.close()
-            export_db_to_json()
-            await interaction.followup.send(f"🗑️ Key `{key}` deleted!", ephemeral=True)
-            log.info(f"🟡 Deleted key {key}")
-        else:
-            conn.close()
-            await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
-            log.info("🟡 Key not found in DB")
-    except Exception as e:
-        log.error(f"❌ Error in /delkey: {e}")
-        await interaction.followup.send("⚠️ Failed to delete key", ephemeral=True)
-
-@bot.tree.command(name="resethwid", description="Reset the HWID for a license key")
-async def resethwid(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
-    log.info("🟡 /resethwid triggered")
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("UPDATE licenses SET hwid=NULL WHERE key=?", (key,))
-        conn.commit()
-        conn.close()
-        export_db_to_json()
-
-        await interaction.followup.send(f"♻️ HWID reset for `{key}`!", ephemeral=True)
-        log.info(f"🟡 Reset HWID for key {key}")
-    except Exception as e:
-        log.error(f"❌ Error in /resethwid: {e}")
-        await interaction.followup.send("⚠️ Failed to reset HWID", ephemeral=True)
 
 # ================== MAIN ==================
 async def main():
