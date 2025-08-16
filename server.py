@@ -7,11 +7,10 @@ from fastapi import FastAPI
 import uvicorn
 import discord
 from discord.ext import commands
-from discord import app_commands
 
 # ================== CONFIG ==================
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "1394437999596404748"))  # Replace with your server ID
+GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "1394437999596404748"))
 
 DB_PATH = "licenses.db"
 JSON_PATH = "licenses.json"
@@ -19,7 +18,7 @@ JSON_PATH = "licenses.json"
 if not DISCORD_BOT_TOKEN:
     raise ValueError("❌ DISCORD_BOT_TOKEN not set in environment variables")
 
-# ================== DATABASE + JSON HELPERS ==================
+# ================== DATABASE HELPERS ==================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -79,15 +78,20 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f"✅ Bot online as {bot.user}")
     try:
+        # Sync to guild
         guild = discord.Object(id=GUILD_ID)
-        synced = await bot.tree.sync(guild=guild)
-        print(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}:")
-        for cmd in synced:
+        synced_guild = await bot.tree.sync(guild=guild)
+        print(f"✅ Synced {len(synced_guild)} commands to guild {GUILD_ID}:")
+        for cmd in synced_guild:
             print(f"   • /{cmd.name} — {cmd.description}")
+
+        # Sync globally
+        synced_global = await bot.tree.sync()
+        print(f"🌍 Synced {len(synced_global)} global commands")
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
 
-    # Always log current keys after ready
+    # Log DB contents
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT key, expiry_date, hwid FROM licenses")
@@ -104,7 +108,7 @@ async def on_ready():
 # ========== SLASH COMMANDS ==========
 @bot.tree.command(name="listkeys", description="List all saved license keys", guild=discord.Object(id=GUILD_ID))
 async def listkeys(interaction: discord.Interaction):
-    print("🟡 /listkeys command received")
+    print("🟡 /listkeys triggered")
     await interaction.response.defer(ephemeral=True)
 
     conn = sqlite3.connect(DB_PATH)
@@ -114,27 +118,17 @@ async def listkeys(interaction: discord.Interaction):
     conn.close()
 
     if not rows:
-        print("🟡 No keys found in DB")
         await interaction.followup.send("No keys found.", ephemeral=True)
         return
 
     msg = "\n".join([f"🔑 {row[0]} | Expiry: {row[1]} | HWID: {row[2]}" for row in rows])
-    print("🟡 Sending keys list to user")
     await interaction.followup.send(msg[:1900], ephemeral=True)
+    print("🟡 Sent list of keys")
 
 @bot.tree.command(name="addkey", description="Add a new license key", guild=discord.Object(id=GUILD_ID))
-async def addkey(
-    interaction: discord.Interaction,
-    key: Optional[str] = "TEST-KEY",
-    expiry_date: Optional[int] = 1760000000,
-    hwid: Optional[str] = None
-):
-    print("🟡 /addkey command received")
+async def addkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY", expiry_date: Optional[int] = 1760000000, hwid: Optional[str] = None):
+    print("🟡 /addkey triggered")
     await interaction.response.defer(ephemeral=True)
-
-    key = key or "TEST-KEY"
-    expiry_date = expiry_date or 1760000000
-    print(f"🟡 Using key={key}, expiry={expiry_date}, hwid={hwid}")
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -142,23 +136,18 @@ async def addkey(
         c.execute("INSERT OR REPLACE INTO licenses (key, expiry_date, hwid) VALUES (?, ?, ?)", (key, expiry_date, hwid))
         conn.commit()
         conn.close()
-        print("🟡 Inserted into DB")
-
         export_db_to_json()
-        print("🟡 Exported to JSON")
 
         await interaction.followup.send(f"✅ Key `{key}` added!", ephemeral=True)
-        print("🟡 Responded to user")
+        print(f"🟡 Added key {key}")
     except Exception as e:
-        print(f"❌ /addkey crashed: {e}")
-        await interaction.followup.send("⚠️ Internal error in /addkey", ephemeral=True)
+        print(f"❌ Error in /addkey: {e}")
+        await interaction.followup.send("⚠️ Failed to add key", ephemeral=True)
 
 @bot.tree.command(name="delkey", description="Delete a license key", guild=discord.Object(id=GUILD_ID))
 async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
-    print("🟡 /delkey command received")
+    print("🟡 /delkey triggered")
     await interaction.response.defer(ephemeral=True)
-
-    key = key or "TEST-KEY"
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -169,47 +158,35 @@ async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KE
             c.execute("DELETE FROM licenses WHERE key=?", (key,))
             conn.commit()
             conn.close()
-            print("🟡 Deleted from DB")
             export_db_to_json()
-            print("🟡 Exported to JSON")
             await interaction.followup.send(f"🗑️ Key `{key}` deleted!", ephemeral=True)
-            print("🟡 Responded to user")
+            print(f"🟡 Deleted key {key}")
         else:
             conn.close()
-            print("🟡 Key not found in DB")
             await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
+            print("🟡 Key not found in DB")
     except Exception as e:
-        print(f"❌ /delkey crashed: {e}")
-        await interaction.followup.send("⚠️ Internal error in /delkey", ephemeral=True)
+        print(f"❌ Error in /delkey: {e}")
+        await interaction.followup.send("⚠️ Failed to delete key", ephemeral=True)
 
 @bot.tree.command(name="resethwid", description="Reset the HWID for a license key", guild=discord.Object(id=GUILD_ID))
 async def resethwid(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
-    print("🟡 /resethwid command received")
+    print("🟡 /resethwid triggered")
     await interaction.response.defer(ephemeral=True)
-
-    key = key or "TEST-KEY"
 
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT key FROM licenses WHERE key=?", (key,))
-        exists = c.fetchone()
-        if exists:
-            c.execute("UPDATE licenses SET hwid=NULL WHERE key=?", (key,))
-            conn.commit()
-            conn.close()
-            print("🟡 HWID reset in DB")
-            export_db_to_json()
-            print("🟡 Exported to JSON")
-            await interaction.followup.send(f"♻️ HWID reset for key `{key}`!", ephemeral=True)
-            print("🟡 Responded to user")
-        else:
-            conn.close()
-            print("🟡 Key not found in DB")
-            await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
+        c.execute("UPDATE licenses SET hwid=NULL WHERE key=?", (key,))
+        conn.commit()
+        conn.close()
+        export_db_to_json()
+
+        await interaction.followup.send(f"♻️ HWID reset for `{key}`!", ephemeral=True)
+        print(f"🟡 Reset HWID for key {key}")
     except Exception as e:
-        print(f"❌ /resethwid crashed: {e}")
-        await interaction.followup.send("⚠️ Internal error in /resethwid", ephemeral=True)
+        print(f"❌ Error in /resethwid: {e}")
+        await interaction.followup.send("⚠️ Failed to reset HWID", ephemeral=True)
 
 # ================== MAIN ==================
 async def main():
@@ -218,7 +195,6 @@ async def main():
 
     loop = asyncio.get_event_loop()
 
-    # Run API server and bot together
     api_task = loop.create_task(
         uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=10000, log_level="info")).serve()
     )
