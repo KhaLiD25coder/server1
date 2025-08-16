@@ -1,4 +1,3 @@
-# force rebuild
 import os
 import json
 import sqlite3
@@ -113,7 +112,12 @@ async def listkeys(interaction: discord.Interaction):
     await interaction.followup.send(msg[:1900], ephemeral=True)
 
 @bot.tree.command(name="addkey", description="Add a new license key", guild=discord.Object(id=GUILD_ID))
-async def addkey(interaction: discord.Interaction, key: str, expiry_date: int, hwid: str = None):
+async def addkey(
+    interaction: discord.Interaction,
+    key: str = "TEST-KEY",                     # default test key
+    expiry_date: int = 1760000000,             # default expiry date
+    hwid: str = None                           # optional
+):
     await interaction.response.defer(ephemeral=True)
 
     conn = sqlite3.connect(DB_PATH)
@@ -127,7 +131,7 @@ async def addkey(interaction: discord.Interaction, key: str, expiry_date: int, h
     await interaction.followup.send(f"✅ Key `{key}` added!", ephemeral=True)
 
 @bot.tree.command(name="delkey", description="Delete a license key", guild=discord.Object(id=GUILD_ID))
-async def delkey(interaction: discord.Interaction, key: str):
+async def delkey(interaction: discord.Interaction, key: str = "TEST-KEY"):
     await interaction.response.defer(ephemeral=True)
 
     conn = sqlite3.connect(DB_PATH)
@@ -146,7 +150,7 @@ async def delkey(interaction: discord.Interaction, key: str):
         await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
 
 @bot.tree.command(name="resethwid", description="Reset the HWID for a license key", guild=discord.Object(id=GUILD_ID))
-async def resethwid(interaction: discord.Interaction, key: str):
+async def resethwid(interaction: discord.Interaction, key: str = "TEST-KEY"):
     await interaction.response.defer(ephemeral=True)
 
     conn = sqlite3.connect(DB_PATH)
@@ -163,6 +167,16 @@ async def resethwid(interaction: discord.Interaction, key: str):
     else:
         conn.close()
         await interaction.followup.send(f"⚠️ Key `{key}` not found.", ephemeral=True)
+
+# ================== ERROR HANDLER ==================
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    print(f"❌ Error in command {interaction.command}: {error}")
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message("⚠️ Something went wrong.", ephemeral=True)
+    except Exception as e:
+        print(f"❌ Failed to send error message: {e}")
 
 # ================== MAIN ==================
 async def main():
@@ -181,3 +195,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
