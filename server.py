@@ -79,6 +79,16 @@ app = FastAPI()
 async def root():
     return {"status": "ok", "message": "Bot + API running"}
 
+@app.get("/health")
+async def health():
+    """Check if API and bot are alive"""
+    return {
+        "api_status": "ok",
+        "bot_online": bot.is_ready(),
+        "bot_user": str(bot.user) if bot.user else None,
+        "guild_id": GUILD_ID,
+    }
+
 # ================== DISCORD BOT ==================
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -132,7 +142,7 @@ async def listkeys(interaction: discord.Interaction):
     log.info("🟡 Sent list of keys")
 
 @bot.tree.command(name="addkey", description="Add a new license key")
-async def addkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY", expiry_date: Optional[int] = 1760000000, hwid: Optional[str] = None):
+async def addkey(interaction: discord.Interaction, key: str, expiry_date: int, hwid: Optional[str] = None):
     log.info("🟡 /addkey triggered")
     await interaction.response.defer(ephemeral=True)
 
@@ -151,7 +161,7 @@ async def addkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KE
         await interaction.followup.send("⚠️ Failed to add key", ephemeral=True)
 
 @bot.tree.command(name="delkey", description="Delete a license key")
-async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
+async def delkey(interaction: discord.Interaction, key: str):
     log.info("🟡 /delkey triggered")
     await interaction.response.defer(ephemeral=True)
 
@@ -176,7 +186,7 @@ async def delkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KE
         await interaction.followup.send("⚠️ Failed to delete key", ephemeral=True)
 
 @bot.tree.command(name="resethwid", description="Reset the HWID for a license key")
-async def resethwid(interaction: discord.Interaction, key: Optional[str] = "TEST-KEY"):
+async def resethwid(interaction: discord.Interaction, key: str):
     log.info("🟡 /resethwid triggered")
     await interaction.response.defer(ephemeral=True)
 
