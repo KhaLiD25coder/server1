@@ -3,12 +3,12 @@ import json
 import sqlite3
 import asyncio
 import logging
+import datetime
 from typing import Optional
 from fastapi import FastAPI
 import uvicorn
 import discord
 from discord.ext import commands
-import datetime
 
 # ================== CONFIG ==================
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -35,7 +35,7 @@ def init_db():
     c.execute(
         """CREATE TABLE IF NOT EXISTS licenses (
             key TEXT PRIMARY KEY,
-            expiry_date TEXT,
+            expiry_date INTEGER,
             hwid TEXT
         )"""
     )
@@ -80,10 +80,6 @@ app = FastAPI()
 async def root():
     return {"status": "ok", "message": "Bot + API running"}
 
-@app.head("/")
-async def root_head():
-    return {"status": "ok"}
-
 # ================== DISCORD BOT ==================
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -92,18 +88,19 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     log.info(f"✅ Bot online as {bot.user}")
     try:
+        # Force resync commands
+        log.info("🔄 Clearing and resyncing commands...")
+        await bot.tree.sync(guild=None)   # clear global
         guild = discord.Object(id=GUILD_ID)
-        synced_guild = await bot.tree.sync(guild=guild)
-        log.info(f"✅ Synced {len(synced_guild)} commands to guild {GUILD_ID}")
-        for cmd in synced_guild:
-            log.info(f"   • /{cmd.name} — {cmd.description}")
+        synced = await bot.tree.sync(guild=guild)  # resync guild
 
-        synced_global = await bot.tree.sync()
-        log.info(f"🌍 Synced {len(synced_global)} global commands")
+        log.info(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
+        for cmd in synced:
+            log.info(f"   • /{cmd.name} — {cmd.description}")
     except Exception as e:
         log.error(f"❌ Failed to sync commands: {e}")
 
-    # ✅ Show keys on startup
+    # Show keys at startup
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT key, expiry_date, hwid FROM licenses")
@@ -115,17 +112,7 @@ async def on_ready():
         log.info("   (No keys found)")
     else:
         for row in rows:
-            expiry = None
-            if row[1]:
-                try:
-                    # Try as UNIX timestamp
-                    expiry = int(row[1])
-                except ValueError:
-                    # Fallback if stored as string date
-                    expiry = int(datetime.datetime.strptime(row[1], "%Y-%m-%d").timestamp())
-
-            exp_str = datetime.datetime.utcfromtimestamp(expiry).strftime("%Y-%m-%d") if expiry else "None"
-            log.info(f"   🔑 {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
+            log.info(f"   🔑 {row[0]} | Expiry: {row[1]} | HWID: {row[2]}")
 
 # ========== SLASH COMMANDS ==========
 @bot.tree.command(name="listkeys", description="List all saved license keys")
@@ -139,26 +126,24 @@ async def listkeys(interaction: discord.Interaction):
     rows = c.fetchall()
     conn.close()
 
+    if not rows:
+        await interaction.followup.send("No keys found.", ephemeral=True)
+        return
+
     now_ts = int(datetime.datetime.utcnow().timestamp())
     active, expired = [], []
 
     for row in rows:
-        expiry = None
-        if row[1]:
-            try:
-                expiry = int(row[1])
-            except ValueError:
-                expiry = int(datetime.datetime.strptime(row[1], "%Y-%m-%d").timestamp())
-
+        expiry = int(row[1]) if isinstance(row[1], int) or str(row[1]).isdigit() else None
         exp_str = datetime.datetime.utcfromtimestamp(expiry).strftime("%Y-%m-%d") if expiry else "None"
+        entry = f"🔑 {row[0]} | Expiry: {exp_str} | HWID: {row[2]}"
+
         if expiry and expiry < now_ts:
-            expired.append(f"❌ {row[0]} | Expired: {exp_str} | HWID: {row[2]}")
+            expired.append(f"❌ {entry}")
         else:
-            active.append(f"✅ {row[0]} | Expiry: {exp_str} | HWID: {row[2]}")
+            active.append(f"✅ {entry}")
 
-    msg = "**Active Keys:**\n" + ("\n".join(active) if active else "(None)")
-    msg += "\n\n**Expired Keys:**\n" + ("\n".join(expired) if expired else "(None)")
-
+    msg = "\n".join(active + expired)
     await interaction.followup.send(msg[:1900], ephemeral=True)
     log.info("🟡 Sent list of keys")
 
@@ -179,7 +164,7 @@ async def addkey(interaction: discord.Interaction, key: Optional[str] = "TEST-KE
 
         exp_str = datetime.datetime.utcfromtimestamp(expiry_date).strftime("%Y-%m-%d")
         await interaction.followup.send(f"✅ Key `{key}` added! Expiry: {exp_str}", ephemeral=True)
-        log.info(f"🟡 Added key {key}, expires {exp_str}")
+        log.info(f"🟡 Added key {key} (expires {exp_str})")
     except Exception as e:
         log.error(f"❌ Error in /addkey: {e}")
         await interaction.followup.send("⚠️ Failed to add key", ephemeral=True)
